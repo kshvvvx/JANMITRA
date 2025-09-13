@@ -1,2 +1,1 @@
-# JANMITRA
-Civic Issue Reporting App (SIH 2025)
+﻿JANMITRA Civic Issue Reporting App
