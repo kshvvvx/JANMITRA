@@ -1,0 +1,77 @@
+const mongoose = require('mongoose');
+
+const citizenSchema = new mongoose.Schema({
+  citizen_id: {
+    type: String,
+    required: true,
+    unique: true,
+    index: true
+  },
+  name: {
+    type: String,
+    required: true
+  },
+  email: {
+    type: String,
+    required: true,
+    unique: true,
+    lowercase: true,
+    index: true
+  },
+  phone: {
+    type: String,
+    required: false
+  },
+  address: {
+    type: String,
+    required: false
+  },
+  location: {
+    lat: Number,
+    lng: Number,
+    address: String
+  },
+  verified: {
+    type: Boolean,
+    default: false
+  },
+  complaints_filed: [{
+    type: String, // complaint_id references
+    required: true
+  }],
+  upvotes_given: [{
+    type: String, // complaint_id references
+    required: true
+  }],
+  created_at: {
+    type: Date,
+    default: Date.now
+  },
+  updated_at: {
+    type: Date,
+    default: Date.now
+  }
+}, {
+  timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' }
+});
+
+// Indexes
+citizenSchema.index({ email: 1, verified: 1 });
+citizenSchema.index({ created_at: -1 });
+
+// Instance methods
+citizenSchema.methods.fileComplaint = function(complaintId) {
+  if (!this.complaints_filed.includes(complaintId)) {
+    this.complaints_filed.push(complaintId);
+  }
+  return this.save();
+};
+
+citizenSchema.methods.addUpvote = function(complaintId) {
+  if (!this.upvotes_given.includes(complaintId)) {
+    this.upvotes_given.push(complaintId);
+  }
+  return this.save();
+};
+
+module.exports = mongoose.model('Citizen', citizenSchema);

@@ -3,7 +3,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { complaints, generateComplaintId } = require('../store/inMemoryStore');
+const { Complaint, Citizen } = require('../models');
 const { calculateDistance } = require('../utils/geo');
 
 // Create a new complaint
@@ -18,9 +18,8 @@ router.post('/', async (req, res) => {
       });
     }
 
-    // Generate complaint ID and timestamp
-    const complaint_id = generateComplaintId();
-    const created_at = new Date().toISOString();
+    // Generate complaint ID
+    const complaint_id = Complaint.generateComplaintId();
 
     // AI Analysis (if AI service is available)
     let aiAnalysis = null;
@@ -29,16 +28,16 @@ router.post('/', async (req, res) => {
     let duplicates = [];
 
     try {
+      // Get existing complaints for AI analysis
+      const existingComplaints = await Complaint.find({}, 'complaint_id description').lean();
+      
       // Call AI service for analysis
       const aiResponse = await fetch('http://localhost:5001/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           description,
-          existing_complaints: complaints.map(c => ({
-            complaint_id: c.complaint_id,
-            description: c.description
-          }))
+          existing_complaints: existingComplaints
         })
       });
 
@@ -58,36 +57,47 @@ router.post('/', async (req, res) => {
       console.warn('AI service unavailable, using fallback categorization:', aiError.message);
     }
 
-    // Create complaint object
-    const complaint = {
+    // Create complaint in MongoDB
+    const complaint = new Complaint({
       complaint_id,
       citizen_id,
       description,
-      category: finalCategory,
       location,
       media: media || [],
       status: 'unresolved',
-      created_at,
       upvotes: [],
       refiles: [],
       actions: [],
       confirmations: [],
-      dangerScore,
-      aiAnalysis: aiAnalysis ? {
-        confidence: aiAnalysis.confidence,
-        urgency_level: aiAnalysis.urgency_level,
-        duplicate_count: aiAnalysis.duplicate_count
-      } : null
-    };
+      dangerScore
+    });
 
-    // Store in memory
-    complaints.push(complaint);
+    const savedComplaint = await complaint.save();
+
+    // Update citizen's complaints_filed array
+    try {
+      await Citizen.findOneAndUpdate(
+        { citizen_id },
+        { 
+          $addToSet: { complaints_filed: complaint_id },
+          $setOnInsert: { 
+            citizen_id,
+            name: `User ${citizen_id}`, // Default name
+            email: `${citizen_id}@temp.com`, // Temporary email
+            verified: false
+          }
+        },
+        { upsert: true, new: true }
+      );
+    } catch (citizenError) {
+      console.warn('Could not update citizen record:', citizenError.message);
+    }
 
     // Return response
     res.status(201).json({
       complaint_id,
       status: 'unresolved',
-      created_at,
+      created_at: savedComplaint.created_at,
       category: finalCategory,
       dangerScore,
       duplicates: duplicates.length > 0 ? duplicates.slice(0, 3) : [] // Return top 3 duplicates
@@ -102,10 +112,10 @@ router.post('/', async (req, res) => {
 });
 
 // Get all complaints (with optional location filtering)
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const { near } = req.query;
-    let filteredComplaints = [...complaints];
+    let query = {};
 
     // If near parameter is provided, filter by location
     if (near) {
@@ -127,29 +137,51 @@ router.get('/', (req, res) => {
         });
       }
 
-      // Filter complaints within 5km radius
+      // Use MongoDB geospatial query for location filtering
       const radiusKm = 5;
-      filteredComplaints = complaints.filter(complaint => {
-        if (!complaint.location || !complaint.location.lat || !complaint.location.lng) {
-          return false; // Skip complaints without valid location
+      query = {
+        'location.lat': { $exists: true },
+        'location.lng': { $exists: true },
+        $expr: {
+          $lte: [
+            {
+              $multiply: [
+                6371, // Earth's radius in km
+                {
+                  $acos: {
+                    $add: [
+                      {
+                        $multiply: [
+                          { $sin: { $multiply: [{ $degreesToRadians: searchLat }, 1] } },
+                          { $sin: { $multiply: [{ $degreesToRadians: '$location.lat' }, 1] } }
+                        ]
+                      },
+                      {
+                        $multiply: [
+                          { $cos: { $multiply: [{ $degreesToRadians: searchLat }, 1] } },
+                          { $cos: { $multiply: [{ $degreesToRadians: '$location.lat' }, 1] } },
+                          { $cos: { $multiply: [{ $degreesToRadians: { $subtract: ['$location.lng', searchLng] } }, 1] } }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            radiusKm
+          ]
         }
-        
-        const distance = calculateDistance(
-          searchLat, searchLng,
-          complaint.location.lat, complaint.location.lng
-        );
-        
-        return distance <= radiusKm;
-      });
+      };
     }
 
-    // Sort complaints by created_at in descending order (newest first)
-    const sortedComplaints = filteredComplaints.sort((a, b) => 
-      new Date(b.created_at) - new Date(a.created_at)
-    );
+    // Fetch complaints from MongoDB, sorted by created_at descending
+    const complaints = await Complaint.find(query)
+      .select('complaint_id description status location upvotes created_at')
+      .sort({ created_at: -1 })
+      .lean();
 
     // Return basic info only (id, description, status, location)
-    const basicComplaints = sortedComplaints.map(complaint => ({
+    const basicComplaints = complaints.map(complaint => ({
       id: complaint.complaint_id,
       description: complaint.description,
       status: complaint.status,
@@ -172,12 +204,12 @@ router.get('/', (req, res) => {
 });
 
 // Get a specific complaint by ID
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    // Find complaint by complaint_id
-    const complaint = complaints.find(c => c.complaint_id === id);
+    // Find complaint by complaint_id in MongoDB
+    const complaint = await Complaint.findOne({ complaint_id: id }).lean();
     
     if (!complaint) {
       return res.status(404).json({
@@ -196,7 +228,7 @@ router.get('/:id', (req, res) => {
 });
 
 // Update complaint status (staff only)
-router.put('/:id/status', (req, res) => {
+router.put('/:id/status', async (req, res) => {
   try {
     const { id } = req.params;
     const { status, comment, staff_id } = req.body;
@@ -216,8 +248,8 @@ router.put('/:id/status', (req, res) => {
       });
     }
 
-    // Find complaint by complaint_id
-    const complaint = complaints.find(c => c.complaint_id === id);
+    // Find and update complaint in MongoDB
+    const complaint = await Complaint.findOne({ complaint_id: id });
     
     if (!complaint) {
       return res.status(404).json({
@@ -225,37 +257,13 @@ router.put('/:id/status', (req, res) => {
       });
     }
 
-    // Update complaint status
-    const previousStatus = complaint.status;
-    complaint.status = status;
-
-    // Initialize actions array if it doesn't exist
-    if (!complaint.actions) {
-      complaint.actions = [];
-    }
-
-    // Add status update action to history
-    const action = {
-      actorType: 'staff',
-      staff_id,
-      action: 'status_update',
-      previousStatus,
-      newStatus: status,
-      comment: comment || null,
-      timestamp: new Date().toISOString()
-    };
-    complaint.actions.push(action);
-
-    // Set resolved_at timestamp if status is resolved
-    if (status === 'resolved' && previousStatus !== 'resolved') {
-      complaint.resolved_at = new Date().toISOString();
-    }
+    // Update status using the schema method
+    await complaint.updateStatus(status, 'staff', comment || `Status changed to ${status}`);
 
     res.json({
       complaint_id: id,
       status: complaint.status,
-      updated_at: action.timestamp,
-      message: `Complaint status updated from ${previousStatus} to ${status}`
+      message: 'Status updated successfully'
     });
 
   } catch (error) {
@@ -267,7 +275,7 @@ router.put('/:id/status', (req, res) => {
 });
 
 // Upvote a complaint
-router.post('/:id/upvote', (req, res) => {
+router.post('/:id/upvote', async (req, res) => {
   try {
     const { id } = req.params;
     const { citizen_id } = req.body;
@@ -279,18 +287,13 @@ router.post('/:id/upvote', (req, res) => {
       });
     }
 
-    // Find complaint by complaint_id
-    const complaint = complaints.find(c => c.complaint_id === id);
+    // Find complaint by complaint_id in MongoDB
+    const complaint = await Complaint.findOne({ complaint_id: id });
     
     if (!complaint) {
       return res.status(404).json({
         error: 'Complaint not found'
       });
-    }
-
-    // Initialize upvotes array if it doesn't exist
-    if (!complaint.upvotes) {
-      complaint.upvotes = [];
     }
 
     // Check if citizen already upvoted
@@ -300,8 +303,19 @@ router.post('/:id/upvote', (req, res) => {
       });
     }
 
-    // Add upvote
-    complaint.upvotes.push(citizen_id);
+    // Add upvote using schema method
+    await complaint.addUpvote(citizen_id);
+
+    // Update citizen's upvotes_given array
+    try {
+      await Citizen.findOneAndUpdate(
+        { citizen_id },
+        { $addToSet: { upvotes_given: id } },
+        { upsert: true }
+      );
+    } catch (citizenError) {
+      console.warn('Could not update citizen upvote record:', citizenError.message);
+    }
 
     res.json({
       complaint_id: id,
@@ -317,7 +331,7 @@ router.post('/:id/upvote', (req, res) => {
 });
 
 // Refile a complaint
-router.post('/:id/refile', (req, res) => {
+router.post('/:id/refile', async (req, res) => {
   try {
     const { id } = req.params;
     const { citizen_id, description, media } = req.body;
@@ -349,8 +363,8 @@ router.post('/:id/refile', (req, res) => {
       });
     }
 
-    // Find complaint by complaint_id
-    const complaint = complaints.find(c => c.complaint_id === id);
+    // Find complaint by complaint_id in MongoDB
+    const complaint = await Complaint.findOne({ complaint_id: id });
     
     if (!complaint) {
       return res.status(404).json({
@@ -358,17 +372,7 @@ router.post('/:id/refile', (req, res) => {
       });
     }
 
-    // Initialize refiles array if it doesn't exist
-    if (!complaint.refiles) {
-      complaint.refiles = [];
-    }
-
-    // Initialize actions array if it doesn't exist
-    if (!complaint.actions) {
-      complaint.actions = [];
-    }
-
-    const timestamp = new Date().toISOString();
+    const timestamp = new Date();
 
     // Use provided description or keep the original complaint description
     const updatedDescription = description || complaint.description;
@@ -392,25 +396,21 @@ router.post('/:id/refile', (req, res) => {
     }
 
     // Append new media to complaint actions log
-    const mediaAction = {
+    await complaint.addAction({
       actorType: 'citizen',
       action: 'media_added',
-      timestamp: timestamp,
       comment: `Added ${media.length} new media file(s) during refile`,
       media: media
-    };
-
-    complaint.actions.push(mediaAction);
+    });
 
     // Add refile action to history
-    const refileAction = {
+    await complaint.addAction({
       actorType: 'citizen',
       action: 'complaint_refiled',
-      timestamp: timestamp,
       comment: description ? 'Complaint refiled with updated description and new media' : 'Complaint refiled with new media'
-    };
+    });
 
-    complaint.actions.push(refileAction);
+    await complaint.save();
 
     res.json({
       complaint_id: id,
@@ -430,7 +430,7 @@ router.post('/:id/refile', (req, res) => {
 });
 
 // Confirm resolution of a complaint
-router.post('/:id/confirm_resolution', (req, res) => {
+router.post('/:id/confirm_resolution', async (req, res) => {
   try {
     const { id } = req.params;
     const { citizen_id } = req.body;
@@ -442,17 +442,14 @@ router.post('/:id/confirm_resolution', (req, res) => {
       });
     }
 
-    // Find complaint by complaint_id
-    const complaint = complaints.find(c => c.complaint_id === id);
+    // Find complaint by complaint_id in MongoDB
+    const complaint = await Complaint.findOne({ complaint_id: id });
     
     if (!complaint) {
       return res.status(404).json({
         error: 'Complaint not found'
       });
     }
-
-    // Initialize confirmations array if it doesn't exist
-    complaint.confirmations = complaint.confirmations || [];
 
     // Check if citizen already confirmed
     if (complaint.confirmations.includes(citizen_id)) {
@@ -471,27 +468,23 @@ router.post('/:id/confirm_resolution', (req, res) => {
 
     if (shouldClose) {
       complaint.status = 'closed';
-      complaint.closed_at = new Date().toISOString();
-      
-      // Ensure actions array exists
-      if (!complaint.actions) {
-        complaint.actions = [];
-      }
+      complaint.closed_at = new Date();
       
       // Add confirmation action
-      const action = {
+      await complaint.addAction({
         actorType: 'citizen',
-        citizen_id,
         action: 'confirm_resolution',
-        timestamp: new Date().toISOString()
-      };
-      complaint.actions.push(action);
+        comment: `Complaint closed with ${complaint.confirmations.length} confirmations`
+      });
     }
 
+    await complaint.save();
+
     res.json({
-      success: true,
+      complaint_id: id,
       confirmations: complaint.confirmations.length,
-      status: complaint.status
+      status: complaint.status,
+      message: shouldClose ? 'Complaint closed due to confirmations' : 'Confirmation recorded'
     });
 
   } catch (error) {

@@ -3,6 +3,7 @@
 
 const express = require('express');
 const cors = require('cors');
+const database = require('./config/database');
 const complaintsRouter = require('./routes/complaints');
 const staffRouter = require('./routes/staff');
 const authRouter = require('./routes/auth-simple');
@@ -10,6 +11,9 @@ const authRouter = require('./routes/auth-simple');
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Connect to MongoDB
+database.connect();
 
 // Root endpoint
 app.get('/', (req, res) => {
