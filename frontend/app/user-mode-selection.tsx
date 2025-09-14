@@ -1,45 +1,53 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, StyleSheet } from 'react-native';
 import { Text, Button, Card } from 'react-native-paper';
 import * as Animatable from 'react-native-animatable';
 import { router, useLocalSearchParams } from 'expo-router';
+import { useTranslation } from 'react-i18next';
 import { ThemedView } from '@/components/themed-view';
 import { ThemedText } from '@/components/themed-text';
+import { useLanguage } from '@/contexts/LanguageContext';
 
 const USER_MODES = [
   {
     id: 'citizen',
+    titleKey: 'citizen',
     title: 'Citizen',
-    titleHindi: 'नागरिक',
     icon: '👤',
+    descriptionKey: 'citizenDescription',
     description: 'Report civic issues and track their resolution',
-    descriptionHindi: 'नागरिक समस्याओं की रिपोर्ट करें और उनके समाधान को ट्रैक करें',
     color: '#2196f3'
   },
   {
     id: 'staff',
+    titleKey: 'municipalStaff',
     title: 'Municipal Staff',
-    titleHindi: 'नगर निगम कर्मचारी',
     icon: '👷‍♂️',
+    descriptionKey: 'staffDescription',
     description: 'Manage and resolve citizen complaints',
-    descriptionHindi: 'नागरिक शिकायतों का प्रबंधन और समाधान करें',
     color: '#4caf50'
   },
   {
     id: 'supervisor',
+    titleKey: 'supervisor',
     title: 'Supervisor',
-    titleHindi: 'पर्यवेक्षक',
     icon: '👨‍💼',
+    descriptionKey: 'supervisorDescription',
     description: 'Monitor department efficiency and handle escalations',
-    descriptionHindi: 'विभागीय दक्षता की निगरानी और एस्केलेशन को संभालें',
     color: '#ff9800'
   }
 ];
 
 export default function UserModeSelectionScreen() {
-  const { language } = useLocalSearchParams<{ language: string }>();
+  const { t } = useTranslation();
+  const { language } = useLanguage();
   const [selectedMode, setSelectedMode] = useState<string>('');
-  const isHindi = language === 'hi';
+  const params = useLocalSearchParams();
+  
+  // Set document title based on current language
+  useEffect(() => {
+    document.title = t('selectUserType', 'Select User Type');
+  }, [language, t]);
 
   const handleModeSelect = (modeId: string) => {
     setSelectedMode(modeId);
@@ -48,6 +56,24 @@ export default function UserModeSelectionScreen() {
   const handleContinue = () => {
     if (selectedMode) {
       // Navigate to appropriate authentication screen based on mode
+      const navigationParams = { ...params };
+      
+      if (selectedMode === 'citizen') {
+        router.push({
+          pathname: '/phone-verification',
+          params: navigationParams
+        });
+      } else if (selectedMode === 'staff') {
+        router.push({
+          pathname: '/staff-login',
+          params: navigationParams
+        });
+      } else if (selectedMode === 'supervisor') {
+        router.push({
+          pathname: '/supervisor-login',
+          params: navigationParams
+        });
+      }
       if (selectedMode === 'citizen') {
         router.push({
           pathname: '/phone-verification',
@@ -67,8 +93,6 @@ export default function UserModeSelectionScreen() {
     }
   };
 
-  const getTitle = (mode: typeof USER_MODES[0]) => isHindi ? mode.titleHindi : mode.title;
-  const getDescription = (mode: typeof USER_MODES[0]) => isHindi ? mode.descriptionHindi : mode.description;
 
   return (
     <ThemedView style={styles.container}>
@@ -76,22 +100,19 @@ export default function UserModeSelectionScreen() {
         <Animatable.View animation="fadeInDown" delay={200}>
           <Text style={styles.appName}>JANMITRA</Text>
           <ThemedText type="default" style={styles.subtitle}>
-            {isHindi ? 'नागरिक समस्या रिपोर्टिंग ऐप' : 'Civic Issue Reporting App'}
+            {t('appSubtitle', 'Civic Issue Reporting App')}
           </ThemedText>
         </Animatable.View>
       </View>
 
       <View style={styles.content}>
-        <Animatable.View animation="fadeInUp" delay={400}>
-          <Text variant="headlineSmall" style={styles.title}>
-            {isHindi ? 'अपना मोड चुनें' : 'Choose Your Mode'}
+        <Animatable.View animation="fadeInDown" delay={200}>
+          <Text style={styles.title}>
+            {t('selectUserType', 'Select User Type')}
           </Text>
-          <Text variant="bodyMedium" style={styles.description}>
-            {isHindi 
-              ? 'आप कैसे ऐप का उपयोग करना चाहते हैं?' 
-              : 'How would you like to use the app?'
-            }
-          </Text>
+          <ThemedText type="default" style={styles.subtitle}>
+            {t('selectUserTypeDescription', 'Please select your user type to continue')}
+          </ThemedText>
         </Animatable.View>
 
         <View style={styles.modeContainer}>
@@ -115,11 +136,11 @@ export default function UserModeSelectionScreen() {
                     <Text style={styles.icon}>{mode.icon}</Text>
                   </View>
                   <View style={styles.modeInfo}>
-                    <Text variant="titleMedium" style={styles.modeTitle}>
-                      {getTitle(mode)}
+                    <Text style={[styles.modeTitle, { color: mode.color }]}>
+                      {t(mode.titleKey, mode.title)}
                     </Text>
-                    <Text variant="bodySmall" style={styles.modeDescription}>
-                      {getDescription(mode)}
+                    <Text style={styles.modeDescription}>
+                      {t(mode.descriptionKey, mode.description)}
                     </Text>
                   </View>
                   {selectedMode === mode.id && (
@@ -139,19 +160,16 @@ export default function UserModeSelectionScreen() {
             onPress={handleContinue}
             disabled={!selectedMode}
             style={styles.continueButton}
-            contentStyle={styles.continueButtonContent}
+            labelStyle={styles.continueButtonLabel}
           >
-            {isHindi ? 'जारी रखें' : 'Continue'}
+            {t('continue', 'Continue')}
           </Button>
         </Animatable.View>
       </View>
 
       <View style={styles.footer}>
         <Text variant="bodySmall" style={styles.footerText}>
-          {isHindi 
-            ? 'शहरों को बेहतर बनाना, एक शिकायत के साथ' 
-            : 'Making cities better, one complaint at a time'
-          }
+          {t('footerText', 'Making cities better, one complaint at a time')}
         </Text>
       </View>
     </ThemedView>
@@ -252,9 +270,12 @@ const styles = StyleSheet.create({
   continueButton: {
     backgroundColor: '#2196f3',
     borderRadius: 12,
-  },
-  continueButtonContent: {
     paddingVertical: 8,
+  },
+  continueButtonLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#fff',
   },
   footer: {
     alignItems: 'center',

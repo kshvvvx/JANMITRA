@@ -1,18 +1,37 @@
 // JANMITRA backend bootstrap
-// Sets up Express server with CORS, mounts complaint routes, and starts the server
+// Sets up Express server with CORS, mounts routes, and starts the server
 
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const database = require('./config/database');
-const complaintsRouter = require('./routes/complaints');
-const staffRouter = require('./routes/staff');
-const authRouter = require('./routes/auth');
 const { startComplaintAutoResolutionJob } = require('./utils/cronJobs');
 
+// Import routes
+const authRouter = require('./routes/auth');
+const complaintsRouter = require('./routes/complaints');
+const staffRouter = require('./routes/staff');
+const departmentsRouter = require('./routes/departments');
+const supervisorRouter = require('./routes/supervisor');
+const auditLogsRouter = require('./routes/auditLogs');
+
+// Import middleware
+const auditLogMiddleware = require('./middleware/auditLogMiddleware');
+
 const app = express();
+
+// Middleware
 app.use(cors());
 app.use(express.json());
+
+// Request logging middleware (should be before other middleware)
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.originalUrl}`);
+  next();
+});
+
+// Audit logging middleware
+app.use(auditLogMiddleware);
 
 // Serve static files from uploads directory
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -35,26 +54,49 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: Date.now() });
 });
 
-// Mount auth router
-console.log('Mounting auth router...');
+// Mount routes
 app.use('/api/auth', authRouter);
-console.log('Auth router mounted successfully');
-
-// Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/complaints', complaintRoutes);
-app.use('/api/departments', require('./routes/departments'));
-app.use('/api/supervisor', require('./routes/supervisor'));
-
-// Mount staff router
+app.use('/api/complaints', complaintsRouter);
+app.use('/api/departments', departmentsRouter);
+app.use('/api/supervisor', supervisorRouter);
 app.use('/api/staff', staffRouter);
+app.use('/api/audit-logs', auditLogsRouter);
+
+// Error handling middleware (should be after all other middleware and routes)
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({
+    status: 'error',
+    message: 'Internal server error',
+    ...(process.env.NODE_ENV === 'development' && { error: err.message })
+  });
+});
+
+// 404 handler (should be the last route)
+app.use((req, res) => {
+  res.status(404).json({ status: 'error', message: 'Not found' });
+});
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Backend listening on http://localhost:${PORT}`);
   
   // Start cron jobs after server is running
   startComplaintAutoResolutionJob();
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled Rejection:', err);
+  // Close server & exit process
+  server.close(() => process.exit(1));
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+  // Close server & exit process
+  server.close(() => process.exit(1));
 });
 
 module.exports = app;

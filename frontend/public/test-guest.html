@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Guest Service Test</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    .test { margin: 10px 0; padding: 10px; border: 1px solid #ddd; border-radius: 4px; }
+    .success { color: green; }
+    .error { color: red; }
+    button { margin: 5px; padding: 8px 12px; }
+    pre { background: #f5f5f5; padding: 10px; border-radius: 4px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>Guest Service Test</h1>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // Mock AsyncStorage for browser
+    const AsyncStorage = {
+      setItem: (key, value) => localStorage.setItem(key, value),
+      getItem: (key) => localStorage.getItem(key),
+      removeItem: (key) => localStorage.removeItem(key),
+    };
+
+    // GuestService implementation
+    const GuestService = {
+      GUEST_SESSION_KEY: '@JANMITRA_GUEST_SESSION',
+      
+      async createSession(name, phone) {
+        const session = {
+          id: `guest-${Date.now()}`,
+          name,
+          phone,
+          timestamp: Date.now(),
+          lastActivity: Date.now(),
+          complaints: []
+        };
+        await AsyncStorage.setItem(this.GUEST_SESSION_KEY, JSON.stringify(session));
+        return session;
+      },
+
+      async getSession() {
+        const session = await AsyncStorage.getItem(this.GUEST_SESSION_KEY);
+        return session ? JSON.parse(session) : null;
+      },
+
+      async updateLastActivity() {
+        const session = await this.getSession();
+        if (session) {
+          session.lastActivity = Date.now();
+          await AsyncStorage.setItem(this.GUEST_SESSION_KEY, JSON.stringify(session));
+        }
+      },
+
+      async addComplaint(complaintId) {
+        const session = await this.getSession();
+        if (session) {
+          session.complaints = [...session.complaints, complaintId];
+          session.lastActivity = Date.now();
+          await AsyncStorage.setItem(this.GUEST_SESSION_KEY, JSON.stringify(session));
+        }
+      },
+
+      async clearSession() {
+        await AsyncStorage.removeItem(this.GUEST_SESSION_KEY);
+      },
+
+      isSessionValid(session) {
+        if (!session) return false;
+        const HOUR_24 = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+        return (Date.now() - session.lastActivity) < HOUR_24;
+      }
+    };
+
+    function TestRunner() {
+      const [results, setResults] = useState([]);
+      const [isRunning, setIsRunning] = useState(false);
+
+      const addResult = (testName, success, details = '') => {
+        setResults(prev => [...prev, { testName, success, details }]);
+        return success;
+      };
+
+      const runTests = async () => {
+        setIsRunning(true);
+        setResults([]);
+        
+        try {
+          // Test 1: Create session
+          const session = await GuestService.createSession('Test User', '1234567890');
+          addResult('Create Session', 
+            session && session.id && session.name === 'Test User',
+            JSON.stringify(session, null, 2)
+          );
+
+          // Test 2: Get session
+          const retrievedSession = await GuestService.getSession();
+          addResult('Get Session', 
+            retrievedSession && retrievedSession.id === session.id,
+            JSON.stringify(retrievedSession, null, 2)
+          );
+
+          // Test 3: Update last activity
+          const oldActivity = retrievedSession.lastActivity;
+          await GuestService.updateLastActivity();
+          const updatedSession = await GuestService.getSession();
+          addResult('Update Last Activity', 
+            updatedSession.lastActivity > oldActivity,
+            `Old: ${new Date(oldActivity).toISOString()}\nNew: ${new Date(updatedSession.lastActivity).toISOString()}`
+          );
+
+          // Test 4: Add complaint
+          await GuestService.addComplaint('test-complaint-123');
+          const sessionWithComplaint = await GuestService.getSession();
+          addResult('Add Complaint',
+            sessionWithComplaint.complaints.includes('test-complaint-123'),
+            `Complaints: ${JSON.stringify(sessionWithComplaint.complaints)}`
+          );
+
+          // Test 5: Session validity
+          const validSession = { 
+            ...session, 
+            lastActivity: Date.now() - 1000 * 60 * 60 // 1 hour old
+          };
+          const expiredSession = { 
+            ...session, 
+            lastActivity: Date.now() - 25 * 60 * 60 * 1000 // 25 hours old
+          };
+          
+          addResult('Session Validity - Valid', 
+            GuestService.isSessionValid(validSession),
+            `Last activity: ${new Date(validSession.lastActivity).toISOString()}`
+          );
+          
+          addResult('Session Validity - Expired', 
+            !GuestService.isSessionValid(expiredSession),
+            `Last activity: ${new Date(expiredSession.lastActivity).toISOString()}`
+          );
+
+          // Test 6: Clear session
+          await GuestService.clearSession();
+          const clearedSession = await GuestService.getSession();
+          addResult('Clear Session', 
+            clearedSession === null,
+            'Session should be null after clear'
+          );
+
+        } catch (error) {
+          addResult('Test Error', false, error.message);
+        } finally {
+          setIsRunning(false);
+        }
+      };
+
+      return (
+        <div>
+          <button 
+            onClick={runTests} 
+            disabled={isRunning}
+            style={{ padding: '10px 15px', fontSize: '16px' }}
+          >
+            {isRunning ? 'Running Tests...' : 'Run Tests'}
+          </button>
+          
+          <h2>Test Results</h2>
+          {results.map((result, index) => (
+            <div 
+              key={index} 
+              className={`test ${result.success ? 'success' : 'error'}`}
+            >
+              <strong>{result.testName}:</strong> {result.success ? '✅ PASS' : '❌ FAIL'}
+              {result.details && (
+                <pre>{result.details}</pre>
+              )}
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<TestRunner />);
+  </script>
+</body>
+</html>

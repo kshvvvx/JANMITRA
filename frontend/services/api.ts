@@ -1,118 +1,77 @@
 // API service layer for JANMITRA frontend
 // Handles all communication with the backend API
 
+import {
+  SendOTPRequest,
+  VerifyOTPRequest,
+  AuthResponse,
+  CreateComplaintRequest,
+  Complaint,
+  ComplaintResponse,
+  StaffLoginRequest,
+  StaffLoginResponse,
+} from '@/types/api';
+
 const BASE_URL = 'http://localhost:5000/api';
 
-// Auth endpoints
-export interface SendOTPRequest {
-  phoneNumber: string;
-}
-
-export interface VerifyOTPRequest {
-  phoneNumber: string;
-  otp: string;
-}
-
-export interface AuthResponse {
-  success: boolean;
-  message: string;
-  user?: any;
-  token?: string;
-}
-
-export interface Complaint {
-  complaint_id: string;
-  citizen_id: string;
-  description: string;
-  category: string;
-  location: {
-    lat: number;
-    lng: number;
-    address: string;
-  };
-  media: Array<{
-    type: string;
-    url: string;
-  }>;
-  status: string;
-  created_at: string;
-  upvotes: string[];
-  refiles: Array<{
-    citizen_id: string;
-    description: string;
-    media: any[];
-    created_at: string;
-  }>;
-  actions: Array<{
-    actorType: string;
-    action: string;
-    timestamp: string;
-    details?: any;
-  }>;
-  confirmations: string[];
-}
-
-export interface CreateComplaintRequest {
-  citizen_id: string;
-  description: string;
-  category: string;
-  location: {
-    lat: number;
-    lng: number;
-    address: string;
-  };
-  media?: Array<{
-    type: string;
-    url: string;
-  }>;
-}
-
-export interface StaffLoginRequest {
-  dept: string;
-  staff_id: string;
-}
-
-export interface StaffLoginResponse {
-  success: boolean;
-  token: string;
-  staff: {
-    staff_id: string;
-    name: string;
-    dept: string;
-    wards: number[];
-  };
-}
 
 class ApiService {
   private async makeRequest<T>(
     endpoint: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
+    retryCount = 0
   ): Promise<T> {
     const url = `${BASE_URL}${endpoint}`;
     
-    const defaultHeaders = {
-      'Content-Type': 'application/json',
-    };
-
-    const config: RequestInit = {
-      ...options,
-      headers: {
-        ...defaultHeaders,
-        ...options.headers,
-      },
-    };
-
     try {
-      const response = await fetch(url, config);
-      
+      const response = await fetch(url, {
+        ...options,
+        headers: {
+          'Content-Type': 'application/json',
+          ...options.headers,
+        },
+      });
+
       if (!response.ok) {
+        // If unauthorized, try to refresh token if this is a retry
+        if (response.status === 401 && retryCount < 1) {
+          // TODO: Implement token refresh logic
+          return this.makeRequest<T>(endpoint, options, retryCount + 1);
+        }
+        
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
+        throw new Error(errorData.message || 'Something went wrong');
       }
 
-      return await response.json();
-    } catch (error) {
-      console.error(`API Error [${endpoint}]:`, error);
+      return response.json();
+    } catch (error: unknown) {
+      const err = error as Error;
+      
+      // If we're offline, throw a special error that can be caught by the offline service
+      if (err.message === 'Network request failed') {
+        const networkError = new Error('NETWORK_ERROR');
+        networkError.message = 'No internet connection';
+        throw networkError;
+      }
+      
+      console.error('API request failed:', error);
+      throw error;
+    }
+  }
+
+  // Method to submit a complaint with retry logic
+  async submitComplaint(data: CreateComplaintRequest): Promise<Complaint> {
+    try {
+      return await this.createComplaint(data);
+    } catch (error: unknown) {
+      const err = error as Error;
+      
+      // If the error is a network error, rethrow it to be handled by the offline service
+      if (err.message === 'NETWORK_ERROR') {
+        throw error;
+      }
+      // For other errors, log and rethrow
+      console.error('Failed to submit complaint:', error);
       throw error;
     }
   }
@@ -138,13 +97,12 @@ class ApiService {
   }
 
   // Complaint endpoints
-  async createComplaint(data: CreateComplaintRequest): Promise<{
-    complaint_id: string;
-    status: string;
-    created_at: string;
-  }> {
-    return this.makeRequest('/complaints', {
+  async createComplaint(data: CreateComplaintRequest): Promise<Complaint> {
+    return this.makeRequest<Complaint>('/complaints', {
       method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify(data),
     });
   }
@@ -153,10 +111,7 @@ class ApiService {
     near?: string;
     radius_km?: number;
     status?: string;
-  }): Promise<{
-    count: number;
-    complaints: Complaint[];
-  }> {
+  }): Promise<ComplaintResponse> {
     const queryParams = new URLSearchParams();
     
     if (params?.near) {
@@ -236,10 +191,7 @@ class ApiService {
       page?: number;
       limit?: number;
     }
-  ): Promise<{
-    count: number;
-    complaints: Complaint[];
-  }> {
+  ): Promise<ComplaintResponse> {
     const queryParams = new URLSearchParams();
     
     if (params?.sort) queryParams.append('sort', params.sort);
@@ -288,10 +240,7 @@ class ApiService {
       ward?: number;
       urgencyMin?: number;
     }
-  ): Promise<{
-    count: number;
-    complaints: Complaint[];
-  }> {
+  ): Promise<ComplaintResponse> {
     const queryParams = new URLSearchParams();
     
     if (params?.from) queryParams.append('from', params.from);
@@ -314,4 +263,12 @@ class ApiService {
 export const apiService = new ApiService();
 
 // Export types
-export type { Complaint, CreateComplaintRequest, StaffLoginRequest, StaffLoginResponse };
+export type {
+  SendOTPRequest,
+  VerifyOTPRequest,
+  AuthResponse,
+  CreateComplaintRequest,
+  Complaint,
+  StaffLoginRequest,
+  StaffLoginResponse,
+};

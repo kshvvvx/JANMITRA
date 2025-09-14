@@ -11,16 +11,21 @@ import {
   Platform,
 } from 'react-native';
 import { router } from 'expo-router';
+import { useTranslation } from 'react-i18next';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const StaffLoginScreen = () => {
+  const { t } = useTranslation();
   const [staffId, setStaffId] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
     if (!staffId || !password) {
-      Alert.alert('Error', 'Please enter both Staff ID and password');
+      Alert.alert(
+        t('error'),
+        !staffId ? t('staffLogin_validation_staffId') : t('staffLogin_validation_password')
+      );
       return;
     }
 
@@ -37,24 +42,41 @@ const StaffLoginScreen = () => {
         }),
       });
 
-      const data = await response.json();
+      const data = await response.json() as {
+        token: string;
+        user: {
+          id: string;
+          staff_id: string;
+          role: string;
+          name: string;
+        };
+        error?: string;
+      };
 
-      if (response.ok) {
+      if (response.ok && data.token) {
         // Store JWT token and user info
         await AsyncStorage.setItem('authToken', data.token);
         await AsyncStorage.setItem('userInfo', JSON.stringify(data.user));
         
-        Alert.alert('Success', 'Login successful!', [
-          {
+        Alert.alert(
+          t('staffLogin_success_title'), 
+          t('staffLogin_success_message'),
+          [{
             text: 'OK',
             onPress: () => router.replace('/(tabs)'),
-          },
-        ]);
+          }]
+        );
       } else {
-        Alert.alert('Error', data.error || 'Login failed');
+        Alert.alert(
+          t('staffLogin_error_title'),
+          data.error || t('staffLogin_error_invalidCredentials')
+        );
       }
     } catch (error) {
-      Alert.alert('Error', 'Network error. Please try again.');
+      Alert.alert(
+        t('staffLogin_error_title'),
+        t('staffLogin_error_network')
+      );
       console.error('Staff login error:', error);
     } finally {
       setLoading(false);
@@ -67,14 +89,14 @@ const StaffLoginScreen = () => {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <View style={styles.content}>
-        <Text style={styles.title}>Staff/Supervisor Login</Text>
+        <Text style={styles.title}>{t('staffLogin_title')}</Text>
         <Text style={styles.subtitle}>
-          Enter your credentials to access the staff portal
+          {t('staffLogin_guestModeDescription')}
         </Text>
 
         <TextInput
           style={styles.input}
-          placeholder="Staff ID (e.g., STAFF001, SUP001)"
+          placeholder={t('staffLogin_staffId')}
           value={staffId}
           onChangeText={setStaffId}
           autoCapitalize="characters"
@@ -83,7 +105,7 @@ const StaffLoginScreen = () => {
 
         <TextInput
           style={styles.input}
-          placeholder="Password"
+          placeholder={t('staffLogin_password')}
           value={password}
           onChangeText={setPassword}
           secureTextEntry
@@ -98,12 +120,12 @@ const StaffLoginScreen = () => {
           {loading ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <Text style={styles.buttonText}>Login</Text>
+            <Text style={styles.buttonText}>{t('staffLogin_loginButton')}</Text>
           )}
         </TouchableOpacity>
 
         <View style={styles.testCredentials}>
-          <Text style={styles.testTitle}>Test Credentials:</Text>
+          <Text style={styles.testTitle}>{t('test_credentials', 'Test Credentials:')}</Text>
           <Text style={styles.testText}>Staff: STAFF001 / password123</Text>
           <Text style={styles.testText}>Staff: STAFF002 / password123</Text>
           <Text style={styles.testText}>Supervisor: SUP001 / supervisor123</Text>
@@ -113,7 +135,7 @@ const StaffLoginScreen = () => {
           style={styles.linkButton}
           onPress={() => router.push('/auth/citizen-login')}
         >
-          <Text style={styles.linkText}>Citizen Login</Text>
+          <Text style={styles.linkText}>{t('citizenLogin')}</Text>
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>

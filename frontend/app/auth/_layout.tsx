@@ -27,6 +27,13 @@ export default function AuthLayout() {
           headerShown: true,
         }} 
       />
+      <Stack.Screen 
+        name="supervisor-login" 
+        options={{ 
+          title: 'Supervisor Login',
+          headerShown: true,
+        }} 
+      />
     </Stack>
   );
 }

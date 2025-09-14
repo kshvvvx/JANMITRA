@@ -1,92 +1,120 @@
-import React, { useState } from 'react';
-import { View, StyleSheet, Image } from 'react-native';
-import { Text, Button, Card } from 'react-native-paper';
+import React, { useState, useEffect } from 'react';
+import { View, StyleSheet } from 'react-native';
+import { Text, Button, Card, useTheme } from 'react-native-paper';
 import * as Animatable from 'react-native-animatable';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useTranslation } from 'react-i18next';
 import { ThemedView } from '@/components/themed-view';
 import { ThemedText } from '@/components/themed-text';
+import { useLanguage } from '@/contexts/LanguageContext';
+
 
 const LANGUAGES = [
   {
     code: 'en',
     name: 'English',
-    flag: '🇺🇸',
-    description: 'Continue in English'
+    flag: '🇬🇧',
+    description: 'Continue in English',
+    nativeName: 'English'
   },
   {
     code: 'hi',
     name: 'हिंदी',
     flag: '🇮🇳',
-    description: 'हिंदी में जारी रखें'
+    description: 'हिंदी में जारी रखें',
+    nativeName: 'हिंदी'
   }
 ];
 
 export default function LanguageSelectionScreen() {
-  const [selectedLanguage, setSelectedLanguage] = useState<string>('');
+  const { t, i18n } = useTranslation();
+  const { setLanguage } = useLanguage();
+  const [selectedLanguage, setSelectedLanguage] = useState<string>(i18n.language || 'en');
+  const params = useLocalSearchParams();
 
-  const handleLanguageSelect = (languageCode: string) => {
+  // Update selected language when i18n language changes
+  useEffect(() => {
+    if (i18n.language && i18n.language !== selectedLanguage) {
+      setSelectedLanguage(i18n.language);
+    }
+  }, [i18n.language, selectedLanguage]);
+
+  const handleLanguageSelect = async (languageCode: string) => {
     setSelectedLanguage(languageCode);
+    await i18n.changeLanguage(languageCode);
+    setLanguage(languageCode);
   };
 
   const handleContinue = () => {
     if (selectedLanguage) {
-      // Store language preference and navigate to user mode selection
-      router.push({
-        pathname: '/user-mode-selection',
-        params: { language: selectedLanguage }
+      // Navigate to user type selection with language parameter
+      router.replace({
+        pathname: '/user-type-selection',
+        params: { language: selectedLanguage, ...params }
       });
     }
   };
 
+  const theme = useTheme();
+
   return (
-    <ThemedView style={styles.container}>
+    <ThemedView style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <View style={styles.header}>
-        <Animatable.View animation="fadeInDown" delay={200}>
-          <Text style={styles.appName}>JANMITRA</Text>
-          <ThemedText type="default" style={styles.subtitle}>
-            Civic Issue Reporting App
+        <Animatable.View animation="fadeInDown" delay={200} style={styles.headerContent}>
+          <Text variant="headlineMedium" style={[styles.title, { color: theme.colors.primary }]}>
+            {t('languageSelection.title', 'Welcome to JANMITRA')}
+          </Text>
+          <ThemedText type="default" style={[styles.subtitle, { color: theme.colors.onSurfaceVariant }]}>
+            {t('languageSelection.subtitle', 'Please select your preferred language')}
           </ThemedText>
         </Animatable.View>
       </View>
 
       <View style={styles.content}>
-        <Animatable.View animation="fadeInUp" delay={400}>
-          <Text variant="headlineSmall" style={styles.title}>
-            Choose Your Language
-          </Text>
-          <Text variant="bodyMedium" style={styles.description}>
-            Select your preferred language to continue
-          </Text>
-        </Animatable.View>
-
         <View style={styles.languageContainer}>
           {LANGUAGES.map((language, index) => (
             <Animatable.View
               key={language.code}
-              animation="bounceIn"
-              delay={600 + index * 200}
+              animation="fadeInUp"
+              delay={200 + index * 100}
+              style={styles.languageItemContainer}
             >
               <Card
                 style={[
                   styles.languageCard,
-                  selectedLanguage === language.code && styles.selectedCard
+                  selectedLanguage === language.code && {
+                    borderColor: theme.colors.primary,
+                    backgroundColor: theme.colors.surfaceVariant,
+                  }
                 ]}
-                mode={selectedLanguage === language.code ? 'elevated' : 'outlined'}
+                mode="elevated"
+                elevation={selectedLanguage === language.code ? 4 : 1}
                 onPress={() => handleLanguageSelect(language.code)}
               >
                 <Card.Content style={styles.cardContent}>
-                  <Text style={styles.flag}>{language.flag}</Text>
+                  <View style={styles.flagContainer}>
+                    <Text style={styles.flag}>{language.flag}</Text>
+                  </View>
                   <View style={styles.languageInfo}>
-                    <Text variant="titleMedium" style={styles.languageName}>
+                    <Text variant="titleMedium" style={[styles.languageName, { color: theme.colors.onSurface }]}>
+                      {language.nativeName}
+                    </Text>
+                    <Text variant="bodyMedium" style={[styles.languageName, { color: theme.colors.onSurfaceVariant }]}>
                       {language.name}
                     </Text>
-                    <Text variant="bodySmall" style={styles.languageDescription}>
-                      {language.description}
+                    <Text style={[styles.languageDescription, { color: theme.colors.onSurfaceVariant }]}>
+                      {language.code === 'en'
+                        ? t('continueInEnglish', 'Continue in English')
+                        : t('continueInHindi', 'हिंदी में जारी रखें')}
                     </Text>
                   </View>
                   {selectedLanguage === language.code && (
-                    <Animatable.View animation="pulse" iterationCount="infinite">
-                      <Text style={styles.checkmark}>✓</Text>
+                    <Animatable.View 
+                      animation="pulse" 
+                      iterationCount="infinite"
+                      style={styles.selectedIndicator}
+                    >
+                      <Text style={{ color: theme.colors.primary }}>✓</Text>
                     </Animatable.View>
                   )}
                 </Card.Content>
@@ -96,21 +124,27 @@ export default function LanguageSelectionScreen() {
         </View>
 
         <Animatable.View animation="fadeInUp" delay={1000}>
-          <Button
-            mode="contained"
-            onPress={handleContinue}
-            disabled={!selectedLanguage}
-            style={styles.continueButton}
-            contentStyle={styles.continueButtonContent}
-          >
-            Continue
-          </Button>
+          <View style={styles.buttonContainer}>
+            <Button
+              mode="contained"
+              onPress={handleContinue}
+              disabled={!selectedLanguage}
+              style={[styles.continueButton, { backgroundColor: theme.colors.primary }]}
+              labelStyle={[styles.continueButtonLabel, { color: theme.colors.onPrimary }]}
+              contentStyle={styles.continueButtonContent}
+            >
+              {t('common.continue', 'Continue')}
+            </Button>
+            <Text style={[styles.note, { color: theme.colors.onSurfaceVariant }]}>
+              {t('languageSelection.languageCanBeChangedLater', 'You can change the language later in settings')}
+            </Text>
+          </View>
         </Animatable.View>
       </View>
 
       <View style={styles.footer}>
         <Text variant="bodySmall" style={styles.footerText}>
-          Making cities better, one complaint at a time
+          {t('makingCitiesBetter', 'Making cities better, one complaint at a time')}
         </Text>
       </View>
     </ThemedView>
@@ -120,93 +154,103 @@ export default function LanguageSelectionScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
   },
   header: {
-    alignItems: 'center',
-    paddingTop: 80,
-    paddingBottom: 40,
-    backgroundColor: '#fff',
-    borderBottomLeftRadius: 30,
-    borderBottomRightRadius: 30,
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
+    padding: 24,
+    paddingTop: 60,
+    paddingBottom: 16,
   },
-  appName: {
-    fontSize: 36,
+  headerContent: {
+    alignItems: 'center',
+  },
+  title: {
     fontWeight: 'bold',
-    color: '#2196f3',
+    textAlign: 'center',
     marginBottom: 8,
   },
   subtitle: {
-    fontSize: 16,
-    color: '#666',
+    textAlign: 'center',
+    opacity: 0.8,
   },
   content: {
     flex: 1,
-    padding: 20,
-  },
-  title: {
-    textAlign: 'center',
-    marginBottom: 8,
-    color: '#333',
-    fontWeight: 'bold',
-  },
-  description: {
-    textAlign: 'center',
-    marginBottom: 40,
-    color: '#666',
+    padding: 24,
+    paddingTop: 16,
   },
   languageContainer: {
-    marginBottom: 40,
+    marginTop: 16,
+  },
+  languageItemContainer: {
+    marginBottom: 16,
   },
   languageCard: {
-    marginBottom: 16,
-    backgroundColor: '#fff',
-    borderRadius: 16,
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'transparent',
   },
-  selectedCard: {
-    borderColor: '#2196f3',
-    borderWidth: 2,
-    backgroundColor: '#e3f2fd',
+  languageDescription: {
+    color: '#666',
+    fontSize: 14,
+    marginTop: 4,
+  },
+  selectedIndicator: {
+    marginLeft: 8,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   cardContent: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 20,
+    padding: 16,
+  },
+  flagContainer: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: 'rgba(0, 0, 0, 0.05)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
   },
   flag: {
-    fontSize: 32,
-    marginRight: 16,
+    fontSize: 28,
   },
   languageInfo: {
     flex: 1,
   },
   languageName: {
-    fontWeight: 'bold',
-    marginBottom: 4,
-    color: '#333',
+    marginBottom: 2,
   },
-  languageDescription: {
-    color: '#666',
-  },
-  checkmark: {
-    fontSize: 24,
-    color: '#2196f3',
-    fontWeight: 'bold',
+  buttonContainer: {
+    padding: 24,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(0, 0, 0, 0.1)',
   },
   continueButton: {
-    backgroundColor: '#2196f3',
-    borderRadius: 12,
+    borderRadius: 8,
+    elevation: 2,
   },
   continueButtonContent: {
-    paddingVertical: 8,
+    height: 48,
+  },
+  continueButtonLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+  },
+  note: {
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 12,
+    opacity: 0.7,
   },
   footer: {
-    alignItems: 'center',
+    paddingBottom: 24,
     padding: 20,
   },
   footerText: {

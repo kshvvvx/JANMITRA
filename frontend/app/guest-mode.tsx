@@ -1,44 +1,109 @@
 import React, { useState } from 'react';
-import { View, StyleSheet, Alert } from 'react-native';
-import { Text, Button, Card, TextInput } from 'react-native-paper';
+import { StyleSheet, Alert, ScrollView } from 'react-native';
+import { Text, Button, Card, TextInput, ActivityIndicator } from 'react-native-paper';
 import * as Animatable from 'react-native-animatable';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
+import { useTranslation } from 'react-i18next';
+import { useLanguage } from '@/contexts/LanguageContext';
 import { ThemedView } from '@/components/themed-view';
-import { ThemedText } from '@/components/themed-text';
+import { GuestService, GuestSession } from '@/services/guestService';
+// Guest session state management
 
 export default function GuestModeScreen() {
-  const { language } = useLocalSearchParams<{ language: string }>();
+  const { t } = useTranslation();
+  const { language } = useLanguage();
   const [guestName, setGuestName] = useState('');
   const [guestPhone, setGuestPhone] = useState('');
-  const isHindi = language === 'hi';
+  const [isLoading, setIsLoading] = useState(true);
+  const [existingSession, setExistingSession] = useState<GuestSession | null>(null);
+  // Use existingSession state to track guest session
 
-  const handleGuestContinue = () => {
+  // Check for existing session on mount
+  useFocusEffect(
+    React.useCallback(() => {
+      const checkExistingSession = async () => {
+        try {
+          const session = await GuestService.getSession();
+          if (session && GuestService.isSessionValid(session)) {
+            setExistingSession(session);
+          } else if (session) {
+            // Clear expired session
+            await GuestService.clearSession();
+          }
+        } catch (error) {
+          console.error('Error checking guest session:', error);
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      checkExistingSession();
+    }, [])
+  );
+
+  const handleGuestContinue = async () => {
     if (!guestName.trim()) {
       Alert.alert(
-        isHindi ? 'त्रुटि' : 'Error',
-        isHindi ? 'कृपया अपना नाम दर्ज करें' : 'Please enter your name'
+        t('error', 'Error'),
+        t('guest.enterName', 'Please enter your name')
       );
       return;
     }
 
-    if (!guestPhone.trim() || guestPhone.length !== 10) {
+    if (!guestPhone.trim() || !/^\d{10}$/.test(guestPhone)) {
       Alert.alert(
-        isHindi ? 'त्रुटि' : 'Error',
-        isHindi ? 'कृपया वैध फोन नंबर दर्ज करें' : 'Please enter a valid phone number'
+        t('error', 'Error'),
+        t('guest.enterValidPhone', 'Please enter a valid 10-digit phone number')
       );
       return;
     }
 
-    // Store guest info and navigate to citizen home
-    router.push({
-      pathname: '/(tabs)',
-      params: { 
-        language, 
-        userType: 'guest',
-        guestName,
-        guestPhone
-      }
-    });
+    try {
+      setIsLoading(true);
+      const session = await GuestService.createSession(guestName, guestPhone);
+      
+      router.replace({
+        pathname: '/(tabs)',
+        params: { 
+          language,
+          userType: 'guest',
+          guestId: session.id,
+          guestName: session.name
+        }
+      });
+    } catch (error) {
+      console.error('Error creating guest session:', error);
+      Alert.alert(
+        t('error', 'Error'),
+        t('guest.sessionError', 'Error creating session. Please try again.')
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleContinueAsGuest = async () => {
+    if (!existingSession) return;
+    
+    try {
+      await GuestService.updateLastActivity();
+      
+      router.replace({
+        pathname: '/(tabs)',
+        params: { 
+          language,
+          userType: 'guest',
+          guestId: existingSession.id,
+          guestName: existingSession.name
+        }
+      });
+    } catch (error) {
+      console.error('Error continuing guest session:', error);
+      Alert.alert(
+        t('error', 'Error'),
+        t('guest.continueError', 'Error continuing session. Please try again.')
+      );
+    }
   };
 
   const handleLoginInstead = () => {
@@ -48,92 +113,115 @@ export default function GuestModeScreen() {
     });
   };
 
+  if (isLoading) {
+    return (
+      <ThemedView style={[styles.container, styles.loadingContainer]}>
+        <ActivityIndicator size="large" />
+      </ThemedView>
+    );
+  }
+
   return (
     <ThemedView style={styles.container}>
-      <View style={styles.header}>
-        <Animatable.View animation="fadeInDown" delay={200}>
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        <Animatable.View 
+          animation="fadeInUp" 
+          duration={800}
+          style={styles.content}
+        >
           <Text style={styles.appName}>JANMITRA</Text>
-          <ThemedText type="default" style={styles.subtitle}>
-            {isHindi ? 'अतिथि मोड' : 'Guest Mode'}
-          </ThemedText>
-        </Animatable.View>
-      </View>
-
-      <View style={styles.content}>
-        <Animatable.View animation="fadeInUp" delay={400}>
-          <Text variant="headlineSmall" style={styles.title}>
-            {isHindi ? 'अतिथि के रूप में रिपोर्ट करें' : 'Report as Guest'}
-          </Text>
-          <Text variant="bodyMedium" style={styles.description}>
-            {isHindi 
-              ? 'बिना खाता बनाए शिकायत दर्ज करें' 
-              : 'File complaints without creating an account'
-            }
-          </Text>
-        </Animatable.View>
-
-        <Animatable.View animation="fadeInUp" delay={600}>
-          <Card style={styles.formCard}>
-            <Card.Content style={styles.cardContent}>
-              <TextInput
-                label={isHindi ? 'आपका नाम' : 'Your Name'}
-                value={guestName}
-                onChangeText={setGuestName}
-                mode="outlined"
-                style={styles.input}
-                placeholder={isHindi ? 'अपना नाम दर्ज करें' : 'Enter your name'}
-              />
-
-              <TextInput
-                label={isHindi ? 'फोन नंबर' : 'Phone Number'}
-                value={guestPhone}
-                onChangeText={setGuestPhone}
-                mode="outlined"
-                style={styles.input}
-                placeholder={isHindi ? 'फोन नंबर दर्ज करें' : 'Enter phone number'}
-                keyboardType="phone-pad"
-                maxLength={10}
-              />
-
-              <Text variant="bodySmall" style={styles.note}>
-                {isHindi 
-                  ? 'नोट: अतिथि मोड में आप केवल शिकायत दर्ज कर सकते हैं। पूर्ण सुविधाओं के लिए खाता बनाएं।'
-                  : 'Note: In guest mode, you can only file complaints. Create an account for full features.'
-                }
-              </Text>
+          <Card style={styles.card}>
+            <Card.Content>
+              {existingSession ? (
+                <>
+                  <Text variant="headlineSmall" style={styles.title}>
+                    {t('guest.welcomeBack', 'Welcome Back!')}
+                  </Text>
+                  <Text style={styles.subtitle}>
+                    {t('guest.loggedInAs', 'You\'re logged in as {{name}} from a previous session.', 
+                      { name: existingSession.name })}
+                  </Text>
+                  
+                  <Button 
+                    mode="contained" 
+                    onPress={handleContinueAsGuest}
+                    style={styles.button}
+                    labelStyle={styles.buttonLabel}
+                  >
+                    {t('guest.continueAsGuest', 'Continue as Guest')}
+                  </Button>
+                  
+                  <Text style={styles.divider}>
+                    {t('common.or', 'OR')}
+                  </Text>
+                  
+                  <Button 
+                    onPress={handleLoginInstead}
+                    style={styles.secondaryButton}
+                    labelStyle={styles.secondaryButtonLabel}
+                  >
+                    {t('auth.loginInstead', 'Login Instead')}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Text variant="headlineSmall" style={styles.title}>
+                    {t('guest.guestMode', 'Guest Mode')}
+                  </Text>
+                  
+                  <Text style={styles.subtitle}>
+                    {t('guest.guestModeDescription', 'Continue as guest to file complaints.')}
+                  </Text>
+                  
+                  <TextInput
+                    label={t('guest.yourName', 'Your Name')}
+                    value={guestName}
+                    onChangeText={setGuestName}
+                    style={styles.input}
+                    mode="outlined"
+                    autoCapitalize="words"
+                  />
+                  
+                  <TextInput
+                    label={t('guest.phoneNumber', 'Phone Number')}
+                    value={guestPhone}
+                    onChangeText={setGuestPhone}
+                    style={styles.input}
+                    mode="outlined"
+                    keyboardType="phone-pad"
+                    maxLength={10}
+                  />
+                  
+                  <Button 
+                    mode="contained" 
+                    onPress={handleGuestContinue}
+                    style={styles.button}
+                    labelStyle={styles.buttonLabel}
+                    disabled={isLoading}
+                  >
+                    {isLoading 
+                      ? t('common.processing', 'Processing...')
+                      : t('guest.continueAsGuest', 'Continue as Guest')}
+                  </Button>
+                  
+                  <Button 
+                    onPress={handleLoginInstead}
+                    style={styles.secondaryButton}
+                    labelStyle={styles.secondaryButtonLabel}
+                    disabled={isLoading}
+                  >
+                    {t('auth.loginInstead', 'Login Instead')}
+                  </Button>
+                </>
+              )}
             </Card.Content>
           </Card>
+          
+          <Text style={styles.note}>
+            {t('guest.sessionNote', 'Note: Guest session will expire after 24 hours of inactivity.')}
+          </Text>
         </Animatable.View>
-
-        <Animatable.View animation="fadeInUp" delay={800}>
-          <Button
-            mode="contained"
-            onPress={handleGuestContinue}
-            style={styles.continueButton}
-            contentStyle={styles.continueButtonContent}
-          >
-            {isHindi ? 'शिकायत दर्ज करें' : 'File Complaint'}
-          </Button>
-
-          <Button
-            mode="outlined"
-            onPress={handleLoginInstead}
-            style={styles.loginButton}
-            contentStyle={styles.loginButtonContent}
-          >
-            {isHindi ? 'खाता बनाएं/लॉगिन करें' : 'Create Account/Login'}
-          </Button>
-        </Animatable.View>
-      </View>
-
-      <View style={styles.footer}>
-        <Text variant="bodySmall" style={styles.footerText}>
-          {isHindi 
-            ? 'शहरों को बेहतर बनाना, एक शिकायत के साथ' 
-            : 'Making cities better, one complaint at a time'
-          }
-        </Text>
-      </View>
+      </ScrollView>
     </ThemedView>
   );
 }
@@ -143,76 +231,72 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f5f5f5',
   },
-  header: {
+  loadingContainer: {
+    justifyContent: 'center',
     alignItems: 'center',
-    paddingTop: 80,
-    paddingBottom: 40,
-    backgroundColor: '#fff',
-    borderBottomLeftRadius: 30,
-    borderBottomRightRadius: 30,
-    elevation: 4,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    padding: 16,
+    justifyContent: 'center',
+  },
+  content: {
+    width: '100%',
+    maxWidth: 500,
+    alignSelf: 'center',
+  },
+  card: {
+    borderRadius: 12,
+    elevation: 2,
+    marginBottom: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 8,
   },
-  appName: {
-    fontSize: 36,
-    fontWeight: 'bold',
-    color: '#2196f3',
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#666',
-  },
-  content: {
-    flex: 1,
-    padding: 20,
-  },
   title: {
     textAlign: 'center',
     marginBottom: 8,
-    color: '#333',
     fontWeight: 'bold',
+    color: '#333',
   },
-  description: {
+  subtitle: {
     textAlign: 'center',
-    marginBottom: 40,
+    marginBottom: 24,
     color: '#666',
   },
-  formCard: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    marginBottom: 30,
+  divider: {
+    textAlign: 'center',
+    marginVertical: 16,
+    color: '#666',
   },
-  cardContent: {
-    padding: 20,
+  note: {
+    textAlign: 'center',
+    fontSize: 12,
+    color: '#666',
+    marginTop: 8,
   },
   input: {
     marginBottom: 16,
     backgroundColor: '#fff',
   },
-  note: {
-    color: '#666',
-    textAlign: 'center',
-    marginTop: 10,
-    lineHeight: 18,
-  },
-  continueButton: {
+  button: {
+    marginTop: 8,
     backgroundColor: '#2196f3',
     borderRadius: 12,
-    marginBottom: 12,
+  },
+  buttonLabel: {
+    color: '#fff',
+    fontSize: 16,
   },
   continueButtonContent: {
     paddingVertical: 8,
   },
-  loginButton: {
-    borderColor: '#2196f3',
-    borderRadius: 12,
+  secondaryButton: {
+    marginTop: 8,
   },
-  loginButtonContent: {
-    paddingVertical: 8,
+  secondaryButtonLabel: {
+    color: '#2196f3',
   },
   footer: {
     alignItems: 'center',
@@ -221,5 +305,10 @@ const styles = StyleSheet.create({
   footerText: {
     color: '#999',
     textAlign: 'center',
+  },
+  appName: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginBottom: 16,
   },
 });

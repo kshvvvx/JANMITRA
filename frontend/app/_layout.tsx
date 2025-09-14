@@ -1,17 +1,15 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 
-import { useColorScheme } from '@/hooks/use-color-scheme';
-import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { AppProviders } from '@/providers/AppProviders';
 
 export const unstable_settings = {
   anchor: '(tabs)',
 };
 
 function RootLayoutNav() {
-  const colorScheme = useColorScheme();
   const { isAuthenticated, isLoading } = useAuth();
 
   if (isLoading) {
@@ -20,16 +18,17 @@ function RootLayoutNav() {
   }
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+    <>
       <Stack>
         {!isAuthenticated ? (
           // Authentication screens
           <>
             <Stack.Screen name="language-selection" options={{ headerShown: false }} />
-            <Stack.Screen name="user-mode-selection" options={{ headerShown: false }} />
-            <Stack.Screen name="phone-verification" options={{ headerShown: false }} />
+            <Stack.Screen name="user-type-selection" options={{ headerShown: false }} />
+            <Stack.Screen name="citizen-login" options={{ headerShown: false }} />
             <Stack.Screen name="staff-login" options={{ headerShown: false }} />
             <Stack.Screen name="supervisor-login" options={{ headerShown: false }} />
+            <Stack.Screen name="phone-verification" options={{ headerShown: false }} />
           </>
         ) : (
           // Main app screens
@@ -41,14 +40,14 @@ function RootLayoutNav() {
         )}
       </Stack>
       <StatusBar style="auto" />
-    </ThemeProvider>
+    </>
   );
 }
 
 export default function RootLayout() {
   return (
-    <AuthProvider>
+    <AppProviders>
       <RootLayoutNav />
-    </AuthProvider>
+    </AppProviders>
   );
 }
