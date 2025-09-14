@@ -148,9 +148,19 @@ router.get('/', (req, res) => {
       new Date(b.created_at) - new Date(a.created_at)
     );
 
+    // Return basic info only (id, description, status, location)
+    const basicComplaints = sortedComplaints.map(complaint => ({
+      id: complaint.complaint_id,
+      description: complaint.description,
+      status: complaint.status,
+      location: complaint.location,
+      upvotes: complaint.upvotes ? complaint.upvotes.length : 0,
+      created_at: complaint.created_at
+    }));
+
     res.json({
-      count: sortedComplaints.length,
-      complaints: sortedComplaints
+      count: basicComplaints.length,
+      complaints: basicComplaints
     });
 
   } catch (error) {
@@ -179,6 +189,77 @@ router.get('/:id', (req, res) => {
 
   } catch (error) {
     console.error('Error fetching complaint:', error);
+    res.status(500).json({
+      error: 'Internal server error'
+    });
+  }
+});
+
+// Update complaint status (staff only)
+router.put('/:id/status', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, comment, staff_id } = req.body;
+
+    // Validate required fields
+    if (!status || !staff_id) {
+      return res.status(400).json({
+        error: 'status and staff_id are required'
+      });
+    }
+
+    // Validate status values
+    const validStatuses = ['unresolved', 'in-progress', 'resolved'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        error: 'Invalid status. Must be one of: unresolved, in-progress, resolved'
+      });
+    }
+
+    // Find complaint by complaint_id
+    const complaint = complaints.find(c => c.complaint_id === id);
+    
+    if (!complaint) {
+      return res.status(404).json({
+        error: 'Complaint not found'
+      });
+    }
+
+    // Update complaint status
+    const previousStatus = complaint.status;
+    complaint.status = status;
+
+    // Initialize actions array if it doesn't exist
+    if (!complaint.actions) {
+      complaint.actions = [];
+    }
+
+    // Add status update action to history
+    const action = {
+      actorType: 'staff',
+      staff_id,
+      action: 'status_update',
+      previousStatus,
+      newStatus: status,
+      comment: comment || null,
+      timestamp: new Date().toISOString()
+    };
+    complaint.actions.push(action);
+
+    // Set resolved_at timestamp if status is resolved
+    if (status === 'resolved' && previousStatus !== 'resolved') {
+      complaint.resolved_at = new Date().toISOString();
+    }
+
+    res.json({
+      complaint_id: id,
+      status: complaint.status,
+      updated_at: action.timestamp,
+      message: `Complaint status updated from ${previousStatus} to ${status}`
+    });
+
+  } catch (error) {
+    console.error('Error updating complaint status:', error);
     res.status(500).json({
       error: 'Internal server error'
     });
