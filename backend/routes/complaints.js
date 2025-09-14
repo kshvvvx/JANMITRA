@@ -322,10 +322,30 @@ router.post('/:id/refile', (req, res) => {
     const { id } = req.params;
     const { citizen_id, description, media } = req.body;
 
-    // Validate required fields
-    if (!citizen_id || !description) {
+    // Validate required fields - citizen_id and media are now required
+    if (!citizen_id) {
       return res.status(400).json({
-        error: 'citizen_id and description are required'
+        error: 'citizen_id is required'
+      });
+    }
+
+    // Validate that new media is provided (required for refile)
+    if (!media || !Array.isArray(media) || media.length === 0) {
+      return res.status(400).json({
+        error: 'New media (photo/video) is required when refiling a complaint'
+      });
+    }
+
+    // Validate media format
+    const validMedia = media.every(item => 
+      item && typeof item === 'object' && 
+      item.type && item.url &&
+      ['image', 'video'].includes(item.type)
+    );
+
+    if (!validMedia) {
+      return res.status(400).json({
+        error: 'Invalid media format. Each media item must have type (image/video) and url'
       });
     }
 
@@ -343,20 +363,62 @@ router.post('/:id/refile', (req, res) => {
       complaint.refiles = [];
     }
 
+    // Initialize actions array if it doesn't exist
+    if (!complaint.actions) {
+      complaint.actions = [];
+    }
+
+    const timestamp = new Date().toISOString();
+
+    // Use provided description or keep the original complaint description
+    const updatedDescription = description || complaint.description;
+
     // Create refile entry
     const refileEntry = {
       citizen_id,
-      description,
-      media: media || [],
-      created_at: new Date().toISOString()
+      description: updatedDescription,
+      media: media,
+      created_at: timestamp,
+      // Location is locked - use original complaint location
+      location: complaint.location
     };
 
     // Add refile to complaint
     complaint.refiles.push(refileEntry);
 
+    // Update the main complaint description if new description was provided
+    if (description && description.trim() !== '') {
+      complaint.description = updatedDescription;
+    }
+
+    // Append new media to complaint actions log
+    const mediaAction = {
+      actorType: 'citizen',
+      action: 'media_added',
+      timestamp: timestamp,
+      comment: `Added ${media.length} new media file(s) during refile`,
+      media: media
+    };
+
+    complaint.actions.push(mediaAction);
+
+    // Add refile action to history
+    const refileAction = {
+      actorType: 'citizen',
+      action: 'complaint_refiled',
+      timestamp: timestamp,
+      comment: description ? 'Complaint refiled with updated description and new media' : 'Complaint refiled with new media'
+    };
+
+    complaint.actions.push(refileAction);
+
     res.json({
       complaint_id: id,
-      refiles: complaint.refiles.length
+      refiles: complaint.refiles.length,
+      description: updatedDescription,
+      location: complaint.location, // Return locked location
+      new_media_count: media.length,
+      message: 'Complaint successfully refiled with new media. Location remains locked.'
     });
 
   } catch (error) {
