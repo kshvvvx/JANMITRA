@@ -1,13 +1,12 @@
-import React, { useState } from 'react';
-import { View, StyleSheet, ScrollView, Alert } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, StyleSheet, ScrollView, Alert, ActivityIndicator } from 'react-native';
 import { Text, Card, List, Switch, Button, Divider } from 'react-native-paper';
 import { router } from 'expo-router';
-import { useAuth } from '@/contexts/AuthContext';
-import { ThemedView } from '@/components/themed-view';
-import { ThemedText } from '@/components/themed-text';
+import { getUserInfo, clearAuth, UserInfo } from '../../utils/auth';
 
 export default function ProfileScreen() {
-  const { user, logout } = useAuth();
+  const [user, setUser] = useState<UserInfo | null>(null);
+  const [loading, setLoading] = useState(true);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [locationEnabled, setLocationEnabled] = useState(true);
 

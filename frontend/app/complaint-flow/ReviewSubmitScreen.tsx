@@ -29,9 +29,8 @@ export default function ReviewSubmitScreen() {
     setIsSubmitting(true);
 
     try {
-      // Prepare submission data for backend API
+      // Prepare submission data for backend API (citizen_id will be extracted from JWT token)
       const submissionData = {
-        citizen_id: 'demo-user',
         description: complaintData?.description || 'Voice complaint recorded',
         location: {
           lat: locationData?.lat || null,
@@ -48,13 +47,12 @@ export default function ReviewSubmitScreen() {
 
       console.log('Submitting complaint data:', submissionData);
 
-      // TODO: For physical devices, replace localhost with ngrok URL (e.g., https://abc123.ngrok.io)
-      // For Expo web, localhost:5000 should work fine
-      const response = await fetch('http://localhost:5000/api/complaints', {
+      // Import auth utilities
+      const { authenticatedFetch, API_ENDPOINTS } = await import('../../utils/auth');
+
+      // Make authenticated API call to backend
+      const response = await authenticatedFetch(API_ENDPOINTS.COMPLAINTS, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify(submissionData),
       });
 

@@ -28,8 +28,11 @@ export default function ComplaintListScreen() {
       if (!isRefresh) setLoading(true);
       setError(null);
 
-      // TODO: For physical devices, replace localhost with ngrok URL
-      const response = await fetch('http://localhost:5000/api/complaints');
+      // Import auth utilities
+      const { authenticatedFetch, API_ENDPOINTS } = await import('../../utils/auth');
+      
+      // Make authenticated API call
+      const response = await authenticatedFetch(API_ENDPOINTS.COMPLAINTS);
       
       if (!response.ok) {
         throw new Error(`Server error: ${response.status} ${response.statusText}`);

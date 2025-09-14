@@ -5,16 +5,20 @@ const express = require('express');
 const router = express.Router();
 const { Complaint, Citizen } = require('../models');
 const { calculateDistance } = require('../utils/geo');
+const { authenticateToken, requireCitizen, requireStaff, requireSupervisor, requireStaffOrSupervisor } = require('../middleware/auth');
 
-// Create a new complaint
-router.post('/', async (req, res) => {
+// Create a new complaint (citizens only)
+router.post('/', requireCitizen, async (req, res) => {
   try {
-    const { citizen_id, description, category, location, media } = req.body;
+    const { description, category, location, media } = req.body;
+    
+    // Use authenticated citizen's ID
+    const citizen_id = req.user.userId;
 
     // Basic validation
-    if (!citizen_id || !description || !location) {
+    if (!description || !location) {
       return res.status(400).json({
-        error: 'Missing required fields: citizen_id, description, and location are required'
+        error: 'Missing required fields: description and location are required'
       });
     }
 
@@ -111,8 +115,8 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Get all complaints (with optional location filtering)
-router.get('/', async (req, res) => {
+// Get all complaints (with optional location filtering) - accessible to all authenticated users
+router.get('/', authenticateToken, async (req, res) => {
   try {
     const { near } = req.query;
     let query = {};
@@ -203,8 +207,8 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Get a specific complaint by ID
-router.get('/:id', async (req, res) => {
+// Get a specific complaint by ID - accessible to all authenticated users
+router.get('/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     
@@ -227,16 +231,19 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// Update complaint status (staff only)
-router.put('/:id/status', async (req, res) => {
+// Update complaint status (staff and supervisors only)
+router.put('/:id/status', requireStaffOrSupervisor, async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, comment, staff_id } = req.body;
+    const { status, comment } = req.body;
+    
+    // Use authenticated staff/supervisor ID
+    const staff_id = req.user.userId;
 
     // Validate required fields
-    if (!status || !staff_id) {
+    if (!status) {
       return res.status(400).json({
-        error: 'status and staff_id are required'
+        error: 'status is required'
       });
     }
 
@@ -274,18 +281,13 @@ router.put('/:id/status', async (req, res) => {
   }
 });
 
-// Upvote a complaint
-router.post('/:id/upvote', async (req, res) => {
+// Upvote a complaint (citizens only)
+router.post('/:id/upvote', requireCitizen, async (req, res) => {
   try {
     const { id } = req.params;
-    const { citizen_id } = req.body;
-
-    // Validate citizen_id
-    if (!citizen_id) {
-      return res.status(400).json({
-        error: 'citizen_id is required'
-      });
-    }
+    
+    // Use authenticated citizen's ID
+    const citizen_id = req.user.userId;
 
     // Find complaint by complaint_id in MongoDB
     const complaint = await Complaint.findOne({ complaint_id: id });
@@ -330,18 +332,14 @@ router.post('/:id/upvote', async (req, res) => {
   }
 });
 
-// Refile a complaint
-router.post('/:id/refile', async (req, res) => {
+// Refile a complaint (citizens only)
+router.post('/:id/refile', requireCitizen, async (req, res) => {
   try {
     const { id } = req.params;
-    const { citizen_id, description, media } = req.body;
-
-    // Validate required fields - citizen_id and media are now required
-    if (!citizen_id) {
-      return res.status(400).json({
-        error: 'citizen_id is required'
-      });
-    }
+    const { description, media } = req.body;
+    
+    // Use authenticated citizen's ID
+    const citizen_id = req.user.userId;
 
     // Validate that new media is provided (required for refile)
     if (!media || !Array.isArray(media) || media.length === 0) {
@@ -429,18 +427,12 @@ router.post('/:id/refile', async (req, res) => {
   }
 });
 
-// Confirm resolution of a complaint
-router.post('/:id/confirm_resolution', async (req, res) => {
+// Confirm resolution of a complaint (citizens only)
+router.post('/:id/confirm_resolution', requireCitizen, async (req, res) => {
   try {
     const { id } = req.params;
-    const { citizen_id } = req.body;
-
-    // Validate citizen_id
-    if (!citizen_id) {
-      return res.status(400).json({
-        error: 'citizen_id is required'
-      });
-    }
+    // Use authenticated citizen's ID
+    const citizen_id = req.user.userId;
 
     // Find complaint by complaint_id in MongoDB
     const complaint = await Complaint.findOne({ complaint_id: id });

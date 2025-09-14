@@ -1,33 +1,30 @@
 // Authentication routes for JANMITRA backend
-// Handles OTP sending, verification, and user management
+// Handles citizen OTP login, staff/supervisor password login, and JWT management
 
 const express = require('express');
-const router = express.Router();
+const bcrypt = require('bcryptjs');
+const { Citizen, Staff, Supervisor } = require('../models');
+const { generateToken, authenticateToken, requireAnyUser } = require('../middleware/auth');
 
-// Test route
-router.get('/test', (req, res) => {
-  res.json({ message: 'Auth router is working!' });
-});
+const router = express.Router();
 
 // In-memory storage for OTPs (in production, use Redis or database)
 const otpStore = new Map();
-const users = new Map();
 
 // Generate random OTP
 function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// Send OTP endpoint
-router.post('/send-otp', (req, res) => {
-  console.log('Send OTP endpoint hit:', req.body);
+// Send OTP for citizen login
+router.post('/citizen/send-otp', async (req, res) => {
   try {
-    const { phoneNumber } = req.body;
+    const { phone } = req.body;
 
     // Validate phone number
-    if (!phoneNumber || !/^\+91[6-9]\d{9}$/.test(phoneNumber)) {
+    if (!phone || !/^[6-9]\d{9}$/.test(phone)) {
       return res.status(400).json({
-        error: 'Invalid phone number. Please provide a valid Indian mobile number.'
+        error: 'Invalid phone number. Please provide a valid 10-digit Indian mobile number.'
       });
     }
 
@@ -36,20 +33,20 @@ router.post('/send-otp', (req, res) => {
     const expiresAt = Date.now() + (5 * 60 * 1000); // 5 minutes
 
     // Store OTP
-    otpStore.set(phoneNumber, {
+    otpStore.set(phone, {
       otp,
       expiresAt,
       attempts: 0
     });
 
     // In production, send OTP via SMS service (Twilio, AWS SNS, etc.)
-    console.log(`OTP for ${phoneNumber}: ${otp}`);
+    console.log(`OTP for ${phone}: ${otp}`);
 
     res.json({
       success: true,
       message: 'OTP sent successfully',
-      // Don't send OTP in production response
-      ...(process.env.NODE_ENV === 'development' && { otp })
+      // Send OTP in development for testing
+      ...(process.env.NODE_ENV !== 'production' && { otp })
     });
 
   } catch (error) {
@@ -60,20 +57,20 @@ router.post('/send-otp', (req, res) => {
   }
 });
 
-// Verify OTP endpoint
-router.post('/verify-otp', (req, res) => {
+// Verify OTP and login citizen
+router.post('/citizen/verify-otp', async (req, res) => {
   try {
-    const { phoneNumber, otp } = req.body;
+    const { phone, otp, name } = req.body;
 
     // Validate inputs
-    if (!phoneNumber || !otp) {
+    if (!phone || !otp) {
       return res.status(400).json({
         error: 'Phone number and OTP are required'
       });
     }
 
     // Check if OTP exists
-    const storedOTP = otpStore.get(phoneNumber);
+    const storedOTP = otpStore.get(phone);
     if (!storedOTP) {
       return res.status(400).json({
         error: 'OTP not found or expired'
@@ -82,7 +79,7 @@ router.post('/verify-otp', (req, res) => {
 
     // Check if OTP is expired
     if (Date.now() > storedOTP.expiresAt) {
-      otpStore.delete(phoneNumber);
+      otpStore.delete(phone);
       return res.status(400).json({
         error: 'OTP has expired'
       });
@@ -90,7 +87,7 @@ router.post('/verify-otp', (req, res) => {
 
     // Check attempt limit
     if (storedOTP.attempts >= 3) {
-      otpStore.delete(phoneNumber);
+      otpStore.delete(phone);
       return res.status(400).json({
         error: 'Too many failed attempts. Please request a new OTP.'
       });
@@ -106,41 +103,36 @@ router.post('/verify-otp', (req, res) => {
     }
 
     // OTP is valid, remove it from store
-    otpStore.delete(phoneNumber);
+    otpStore.delete(phone);
 
-    // Check if user exists
-    let user = users.get(phoneNumber);
-    if (!user) {
-      // Create new user
-      user = {
-        id: `user-${Date.now()}`,
-        phoneNumber,
-        language: 'en',
-        userType: 'citizen',
-        isVerified: true,
-        createdAt: new Date().toISOString(),
-        lastLoginAt: new Date().toISOString()
-      };
-      users.set(phoneNumber, user);
-    } else {
-      // Update last login
-      user.lastLoginAt = new Date().toISOString();
-      users.set(phoneNumber, user);
+    // Find or create citizen
+    let citizen = await Citizen.findOne({ phone });
+    if (!citizen) {
+      // Create new citizen
+      const citizen_id = `CIT-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`.toUpperCase();
+      citizen = new Citizen({
+        citizen_id,
+        phone,
+        name: name || `User ${phone}`,
+        verified: true
+      });
+      await citizen.save();
     }
 
-    // Generate JWT token (optional, for session management)
-    const jwt = require('jsonwebtoken');
-    const token = jwt.sign(
-      { userId: user.id, phoneNumber: user.phoneNumber },
-      process.env.JWT_SECRET || 'janmitra-secret',
-      { expiresIn: '7d' }
-    );
+    // Generate JWT token
+    const token = generateToken(citizen, 'citizen');
 
     res.json({
       success: true,
-      message: 'OTP verified successfully',
-      user,
-      token
+      message: 'Login successful',
+      token,
+      user: {
+        id: citizen._id,
+        citizen_id: citizen.citizen_id,
+        name: citizen.name,
+        phone: citizen.phone,
+        role: 'citizen'
+      }
     });
 
   } catch (error) {
@@ -151,27 +143,92 @@ router.post('/verify-otp', (req, res) => {
   }
 });
 
-// Get user profile
-router.get('/profile', (req, res) => {
+// Staff/Supervisor login with ID + password
+router.post('/staff/login', async (req, res) => {
   try {
-    const { phoneNumber } = req.query;
+    const { staff_id, password } = req.body;
 
-    if (!phoneNumber) {
+    // Validate inputs
+    if (!staff_id || !password) {
       return res.status(400).json({
-        error: 'Phone number is required'
+        error: 'Staff ID and password are required'
       });
     }
 
-    const user = users.get(phoneNumber);
+    // Find staff member
+    let user = await Staff.findOne({ staff_id });
+    let role = 'staff';
+
+    // If not found in staff, check supervisors
     if (!user) {
-      return res.status(404).json({
-        error: 'User not found'
+      user = await Supervisor.findOne({ supervisor_id: staff_id });
+      role = 'supervisor';
+    }
+
+    if (!user) {
+      return res.status(401).json({
+        error: 'Invalid credentials'
       });
     }
+
+    // Verify password
+    const isValidPassword = await bcrypt.compare(password, user.password);
+    if (!isValidPassword) {
+      return res.status(401).json({
+        error: 'Invalid credentials'
+      });
+    }
+
+    // Check if user is active
+    if (!user.active) {
+      return res.status(403).json({
+        error: 'Account is deactivated'
+      });
+    }
+
+    // Generate JWT token
+    const token = generateToken(user, role);
 
     res.json({
       success: true,
-      user
+      message: 'Login successful',
+      token,
+      user: {
+        id: user._id,
+        staff_id: user.staff_id || user.supervisor_id,
+        name: user.name,
+        email: user.email,
+        department: user.department || user.departments,
+        role: role
+      }
+    });
+
+  } catch (error) {
+    console.error('Error during staff login:', error);
+    res.status(500).json({
+      error: 'Internal server error'
+    });
+  }
+});
+
+// Get current user profile
+router.get('/me', authenticateToken, (req, res) => {
+  try {
+    const user = req.user;
+    
+    res.json({
+      success: true,
+      user: {
+        id: user.id,
+        userId: user.userId,
+        role: user.role,
+        email: user.email,
+        name: user.userData.name,
+        phone: user.userData.phone,
+        department: user.userData.department || user.userData.departments,
+        verified: user.userData.verified,
+        active: user.userData.active
+      }
     });
 
   } catch (error) {
@@ -182,32 +239,75 @@ router.get('/profile', (req, res) => {
   }
 });
 
-// Update user profile
-router.put('/profile', (req, res) => {
+// Update current user profile
+router.put('/me', authenticateToken, async (req, res) => {
   try {
-    const { phoneNumber, updates } = req.body;
+    const { name, email, phone, address } = req.body;
+    const user = req.user;
 
-    if (!phoneNumber) {
-      return res.status(400).json({
-        error: 'Phone number is required'
-      });
+    let updatedUser;
+    
+    // Update based on user role
+    switch (user.role) {
+      case 'citizen':
+        updatedUser = await Citizen.findByIdAndUpdate(
+          user.id,
+          { 
+            ...(name && { name }),
+            ...(email && { email }),
+            ...(phone && { phone }),
+            ...(address && { address })
+          },
+          { new: true }
+        );
+        break;
+        
+      case 'staff':
+        updatedUser = await Staff.findByIdAndUpdate(
+          user.id,
+          { 
+            ...(name && { name }),
+            ...(email && { email }),
+            ...(phone && { phone })
+          },
+          { new: true }
+        );
+        break;
+        
+      case 'supervisor':
+        updatedUser = await Supervisor.findByIdAndUpdate(
+          user.id,
+          { 
+            ...(name && { name }),
+            ...(email && { email }),
+            ...(phone && { phone })
+          },
+          { new: true }
+        );
+        break;
+        
+      default:
+        return res.status(400).json({
+          error: 'Invalid user role'
+        });
     }
 
-    const user = users.get(phoneNumber);
-    if (!user) {
+    if (!updatedUser) {
       return res.status(404).json({
         error: 'User not found'
       });
     }
 
-    // Update user
-    const updatedUser = { ...user, ...updates, updatedAt: new Date().toISOString() };
-    users.set(phoneNumber, updatedUser);
-
     res.json({
       success: true,
       message: 'Profile updated successfully',
-      user: updatedUser
+      user: {
+        id: updatedUser._id,
+        name: updatedUser.name,
+        email: updatedUser.email,
+        phone: updatedUser.phone,
+        role: user.role
+      }
     });
 
   } catch (error) {
@@ -219,7 +319,7 @@ router.put('/profile', (req, res) => {
 });
 
 // Logout endpoint
-router.post('/logout', (req, res) => {
+router.post('/logout', authenticateToken, (req, res) => {
   try {
     // In a real implementation, you might want to blacklist the JWT token
     // For now, we'll just return success

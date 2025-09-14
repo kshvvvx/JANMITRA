@@ -13,14 +13,17 @@ const citizenSchema = new mongoose.Schema({
   },
   email: {
     type: String,
-    required: true,
+    required: false,
     unique: true,
+    sparse: true,
     lowercase: true,
     index: true
   },
   phone: {
     type: String,
-    required: false
+    required: true,
+    unique: true,
+    index: true
   },
   address: {
     type: String,

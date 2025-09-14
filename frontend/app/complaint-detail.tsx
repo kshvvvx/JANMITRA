@@ -44,8 +44,11 @@ export default function ComplaintDetailScreen() {
       setLoading(true);
       setError(null);
 
-      // TODO: For physical devices, replace localhost with ngrok URL
-      const response = await fetch(`http://localhost:5000/api/complaints/${complaintId}`);
+      // Import auth utilities
+      const { authenticatedFetch, API_ENDPOINTS } = await import('../utils/auth');
+      
+      // Make authenticated API call
+      const response = await authenticatedFetch(API_ENDPOINTS.COMPLAINT_BY_ID(complaintId));
       
       if (!response.ok) {
         throw new Error(`Server error: ${response.status} ${response.statusText}`);
@@ -67,12 +70,13 @@ export default function ComplaintDetailScreen() {
     try {
       setUpvoting(true);
 
-      // TODO: For physical devices, replace localhost with ngrok URL
-      const response = await fetch(`http://localhost:5000/api/complaints/${complaintId}/upvote`, {
+      // Import auth utilities
+      const { authenticatedFetch, API_ENDPOINTS } = await import('../utils/auth');
+      
+      // Make authenticated API call (citizen_id will be extracted from JWT token)
+      const response = await authenticatedFetch(API_ENDPOINTS.UPVOTE_COMPLAINT(complaintId), {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        body: JSON.stringify({}),
       });
 
       if (!response.ok) {
