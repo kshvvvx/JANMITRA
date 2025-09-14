@@ -61,9 +61,9 @@ async function testAuthentication() {
 
     // Test 2: Send OTP
     console.log('\n2. Testing OTP sending...');
-    const phoneNumber = '+919876543210';
-    const sendOTP = await makeRequest(`${BACKEND_URL}/api/auth/send-otp`, 'POST', {
-      phoneNumber
+    const phoneNumber = '9876543210';
+    const sendOTP = await makeRequest(`${BACKEND_URL}/api/auth/citizen/send-otp`, 'POST', {
+      phone: phoneNumber
     });
     
     if (sendOTP.ok && sendOTP.data.success) {
@@ -80,31 +80,31 @@ async function testAuthentication() {
     // Test 3: Verify OTP (using the OTP from response)
     console.log('\n3. Testing OTP verification...');
     const otp = sendOTP.data.otp || '123456'; // Use actual OTP or fallback
-    const verifyOTP = await makeRequest(`${BACKEND_URL}/api/auth/verify-otp`, 'POST', {
-      phoneNumber,
+    const verifyOTP = await makeRequest(`${BACKEND_URL}/api/auth/citizen/verify-otp`, 'POST', {
+      phone: phoneNumber,
       otp
     });
     
-    if (verifyOTP.ok && verifyOTP.data.success) {
+    if (verifyOTP.ok && verifyOTP.data.token) {
       console.log('✅ OTP verified successfully');
-      console.log(`   User ID: ${verifyOTP.data.user.id}`);
-      console.log(`   Phone: ${verifyOTP.data.user.phoneNumber}`);
-      console.log(`   Language: ${verifyOTP.data.user.language}`);
-      console.log(`   User Type: ${verifyOTP.data.user.userType}`);
+      console.log(`   Token: ${verifyOTP.data.token.substring(0, 20)}...`);
+      console.log(`   User Role: ${verifyOTP.data.role}`);
+      
+      // Test 4: Get user profile with token
+      console.log('\n4. Testing user profile retrieval...');
+      const profile = await makeRequest(`${BACKEND_URL}/api/auth/me`, 'GET', null, {
+        'Authorization': `Bearer ${verifyOTP.data.token}`
+      });
+      
+      if (profile.ok) {
+        console.log('✅ User profile retrieved successfully');
+        console.log(`   Phone: ${profile.data.phone}`);
+        console.log(`   Role: ${profile.data.role}`);
+      } else {
+        console.log('❌ Profile retrieval failed:', profile.data);
+      }
     } else {
       console.log('❌ OTP verification failed:', verifyOTP.data);
-    }
-
-    // Test 4: Get user profile
-    console.log('\n4. Testing user profile retrieval...');
-    const profile = await makeRequest(`${BACKEND_URL}/api/auth/profile?phoneNumber=${encodeURIComponent(phoneNumber)}`);
-    
-    if (profile.ok && profile.data.success) {
-      console.log('✅ User profile retrieved successfully');
-      console.log(`   Name: ${profile.data.user.name || 'Not set'}`);
-      console.log(`   Created: ${profile.data.user.createdAt}`);
-    } else {
-      console.log('❌ Profile retrieval failed:', profile.data);
     }
 
     console.log('\n🎉 Authentication system test complete!');

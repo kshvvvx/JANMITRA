@@ -81,10 +81,15 @@ const handleUploadError = (error, req, res, next) => {
     }
   }
   
-  if (error.message.includes('Invalid file type')) {
+  if (error && error.message && error.message.includes('Invalid file type')) {
     return res.status(400).json({
       error: error.message
     });
+  }
+  
+  // Skip error if no actual error or if it's just middleware flow
+  if (!error) {
+    return next();
   }
   
   next(error);

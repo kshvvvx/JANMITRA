@@ -94,7 +94,7 @@ const complaintSchema = new mongoose.Schema({
   media: [mediaSchema],
   status: {
     type: String,
-    enum: ['unresolved', 'in-progress', 'resolved'],
+    enum: ['unresolved', 'in-progress', 'awaiting_confirmation', 'resolved'],
     default: 'unresolved',
     index: true
   },
@@ -114,6 +114,10 @@ const complaintSchema = new mongoose.Schema({
     type: String, // citizen_id of confirmers
     required: true
   }],
+  resolved_at: {
+    type: Date,
+    required: false
+  },
   created_at: {
     type: Date,
     default: Date.now,
@@ -154,6 +158,35 @@ complaintSchema.methods.addAction = function(actionData) {
     ...actionData,
     timestamp: new Date()
   });
+  return this.save();
+};
+
+complaintSchema.methods.addConfirmation = function(citizenId) {
+  if (!this.confirmations.includes(citizenId)) {
+    this.confirmations.push(citizenId);
+    
+    // Add action log
+    this.actions.push({
+      actorType: 'citizen',
+      action: 'confirmed_resolution',
+      timestamp: new Date(),
+      comment: `Citizen confirmed resolution (${this.confirmations.length} confirmations)`
+    });
+    
+    // Auto-resolve if 3+ confirmations
+    if (this.confirmations.length >= 3) {
+      this.status = 'resolved';
+      this.resolved_at = new Date();
+      this.upvotes = []; // Reset upvotes as requested
+      
+      this.actions.push({
+        actorType: 'system',
+        action: 'auto_resolved',
+        timestamp: new Date(),
+        comment: 'Automatically resolved after 3+ citizen confirmations'
+      });
+    }
+  }
   return this.save();
 };
 
@@ -208,6 +241,33 @@ complaintSchema.statics.generateComplaintId = function() {
   const timestamp = Date.now().toString(36);
   const random = Math.random().toString(36).substr(2, 5);
   return `COMP-${timestamp}-${random}`.toUpperCase();
+};
+
+// Static method to auto-resolve old awaiting_confirmation complaints
+complaintSchema.statics.autoResolveOldComplaints = function() {
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  
+  return this.updateMany(
+    {
+      status: 'awaiting_confirmation',
+      updated_at: { $lt: sevenDaysAgo }
+    },
+    {
+      $set: {
+        status: 'resolved',
+        resolved_at: new Date()
+      },
+      $push: {
+        actions: {
+          actorType: 'system',
+          action: 'auto_resolved',
+          timestamp: new Date(),
+          comment: 'Automatically resolved after 7 days in awaiting_confirmation status'
+        }
+      }
+    }
+  );
 };
 
 module.exports = mongoose.model('Complaint', complaintSchema);

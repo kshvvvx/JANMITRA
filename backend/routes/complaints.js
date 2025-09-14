@@ -5,17 +5,23 @@ const express = require('express');
 const router = express.Router();
 const { Complaint, Citizen } = require('../models');
 const { calculateDistance } = require('../utils/geo');
-const { authenticateToken, requireCitizen, requireStaff, requireSupervisor, requireStaffOrSupervisor } = require('../middleware/auth');
+const { authenticateToken, requireRole, requireCitizen, requireStaff, requireSupervisor, requireStaffOrSupervisor } = require('../middleware/auth');
 const { notifyComplaintStatusChange, notifyComplaintUpvoted, notifyStaffNewComplaint } = require('../utils/notifications');
 const { uploadMultiple, handleUploadError, processUploadedFiles } = require('../middleware/upload');
 
 // Create a new complaint (citizens only)
-router.post('/', requireCitizen, uploadMultiple, handleUploadError, async (req, res) => {
+router.post('/', authenticateToken, requireRole(['citizen']), (req, res, next) => {
+  // Skip multer for JSON requests
+  if (req.headers['content-type'] === 'application/json') {
+    return next();
+  }
+  uploadMultiple(req, res, next);
+}, handleUploadError, async (req, res) => {
   try {
-    // Parse JSON fields from multipart form data
+    // Handle both JSON and multipart form data
     const description = req.body.description;
     const category = req.body.category;
-    const location = req.body.location ? JSON.parse(req.body.location) : null;
+    const location = typeof req.body.location === 'string' ? JSON.parse(req.body.location) : req.body.location;
     
     // Use authenticated citizen's ID
     const citizen_id = req.user.userId;
@@ -575,10 +581,9 @@ router.post('/:id/refile', requireCitizen, async (req, res) => {
 });
 
 // Confirm resolution of a complaint (citizens only)
-router.post('/:id/confirm_resolution', requireCitizen, async (req, res) => {
+router.post('/:id/confirm-resolution', requireCitizen, async (req, res) => {
   try {
     const { id } = req.params;
-    // Use authenticated citizen's ID
     const citizen_id = req.user.userId;
 
     // Find complaint by complaint_id in MongoDB
@@ -593,43 +598,46 @@ router.post('/:id/confirm_resolution', requireCitizen, async (req, res) => {
     // Check if citizen already confirmed
     if (complaint.confirmations.includes(citizen_id)) {
       return res.status(400).json({
-        error: 'Already confirmed'
+        error: 'You have already confirmed this resolution'
       });
     }
 
-    // Add citizen_id to confirmations
-    complaint.confirmations.push(citizen_id);
-
-    // Check if we have enough confirmations or if 7 days have passed
-    const shouldClose = complaint.confirmations.length >= 3 || 
-      (complaint.resolved_at && 
-       (new Date() - new Date(complaint.resolved_at)) >= (7 * 24 * 60 * 60 * 1000));
-
-    if (shouldClose) {
-      complaint.status = 'closed';
-      complaint.closed_at = new Date();
-      
-      // Add confirmation action
-      await complaint.addAction({
-        actorType: 'citizen',
-        action: 'confirm_resolution',
-        comment: `Complaint closed with ${complaint.confirmations.length} confirmations`
-      });
-    }
-
-    await complaint.save();
+    // Use the model method to add confirmation and handle auto-resolution
+    await complaint.addConfirmation(citizen_id);
 
     res.json({
       complaint_id: id,
       confirmations: complaint.confirmations.length,
       status: complaint.status,
-      message: shouldClose ? 'Complaint closed due to confirmations' : 'Confirmation recorded'
+      resolved: complaint.status === 'resolved',
+      message: complaint.status === 'resolved' 
+        ? 'Complaint automatically resolved after 3+ confirmations' 
+        : 'Resolution confirmation recorded'
     });
 
   } catch (error) {
     console.error('Error confirming resolution:', error);
     res.status(500).json({
       error: 'Internal server error'
+    });
+  }
+});
+
+// Manual trigger for auto-resolution (for testing purposes)
+router.post('/trigger-auto-resolution', async (req, res) => {
+  try {
+    const { triggerAutoResolution } = require('../utils/cronJobs');
+    const result = await triggerAutoResolution();
+    
+    res.json({
+      success: true,
+      message: `Auto-resolved ${result.modifiedCount} complaints`,
+      modifiedCount: result.modifiedCount
+    });
+  } catch (error) {
+    console.error('Error in manual auto-resolution trigger:', error);
+    res.status(500).json({
+      error: 'Failed to trigger auto-resolution'
     });
   }
 });

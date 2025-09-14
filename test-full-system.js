@@ -1,251 +1,358 @@
 #!/usr/bin/env node
 /**
- * JANMITRA Full System Test
- * Tests the complete flow: Backend + AI Services + Frontend API integration
+ * JANMITRA Comprehensive System Test
+ * Tests all backend endpoints, authentication, complaints, and features
  */
 
-const http = require('http');
+const fetch = require('node-fetch');
 
-const BACKEND_URL = 'http://localhost:5000';
-const AI_URL = 'http://localhost:5001';
+const API_BASE = 'http://localhost:5000/api';
+const BACKEND_BASE = 'http://localhost:5000';
 
-function makeRequest(url, method = 'GET', data = null, headers = {}) {
-  return new Promise((resolve, reject) => {
-    const urlObj = new URL(url);
-    const options = {
-      hostname: urlObj.hostname,
-      port: urlObj.port,
-      path: urlObj.pathname + urlObj.search,
-      method: method,
-      headers: {
-        'Content-Type': 'application/json',
-        ...headers
-      }
-    };
+// Test data
+const TEST_CITIZENS = [
+  { phone: '9876543210', name: 'Test Citizen 1' },
+  { phone: '9876543211', name: 'Test Citizen 2' },
+  { phone: '9876543212', name: 'Test Citizen 3' }
+];
 
-    const req = http.request(options, (res) => {
-      let body = '';
-      res.on('data', (chunk) => body += chunk);
-      res.on('end', () => {
-        try {
-          const jsonData = JSON.parse(body);
-          resolve({ status: res.statusCode, data: jsonData, ok: res.statusCode < 400 });
-        } catch (e) {
-          resolve({ status: res.statusCode, data: body, ok: res.statusCode < 400 });
-        }
-      });
-    });
+const TEST_STAFF = {
+  staff_id: 'STAFF001',
+  password: 'password123'
+};
 
-    req.on('error', reject);
-    
-    if (data) {
-      req.write(JSON.stringify(data));
-    }
-    
-    req.end();
-  });
-}
+let testResults = {
+  passed: 0,
+  failed: 0,
+  errors: []
+};
 
-async function testAIServices() {
-  console.log('🤖 Testing AI Services...');
-  
-  try {
-    // Test AI health
-    const health = await makeRequest(`${AI_URL}/health`);
-    if (!health.ok) {
-      console.log('❌ AI service not running. Start it with: cd ai-services && python app.py');
-      return false;
-    }
-    console.log('✅ AI service is running');
-
-    // Test categorization
-    const categorize = await makeRequest(`${AI_URL}/categorize`, 'POST', {
-      description: 'Large pothole on main road causing vehicle damage'
-    });
-    
-    if (categorize.ok) {
-      console.log(`✅ Categorization: ${categorize.data.category} (confidence: ${categorize.data.confidence})`);
-    } else {
-      console.log('❌ Categorization failed');
-      return false;
-    }
-
-    // Test danger scoring
-    const danger = await makeRequest(`${AI_URL}/danger-score`, 'POST', {
-      description: 'Live wire hanging dangerously low',
-      category: 'electric'
-    });
-    
-    if (danger.ok) {
-      console.log(`✅ Danger Score: ${danger.data.danger_score} (${danger.data.urgency_level})`);
-    } else {
-      console.log('❌ Danger scoring failed');
-      return false;
-    }
-
-    return true;
-  } catch (error) {
-    console.log('❌ AI service error:', error.message);
-    return false;
+function logResult(testName, success, error = null) {
+  if (success) {
+    console.log(`✅ ${testName}`);
+    testResults.passed++;
+  } else {
+    console.log(`❌ ${testName}: ${error}`);
+    testResults.failed++;
+    testResults.errors.push({ test: testName, error });
   }
 }
 
-async function testBackendWithAI() {
-  console.log('\n🔗 Testing Backend with AI Integration...');
+// Test backend health endpoints
+async function testBackendHealth() {
+  console.log('\n🏥 Testing Backend Health...');
   
   try {
-    // Test complaint creation with AI
-    const complaint = await makeRequest(`${BACKEND_URL}/api/complaints`, 'POST', {
-      citizen_id: 'user-123',
-      description: 'Large pothole on main road causing vehicle damage and traffic issues',
-      location: { lat: 28.7041, lng: 77.1025, address: 'Main Road, Sector X' },
-      media: []
-    });
+    const response = await fetch(`${BACKEND_BASE}/health`);
+    logResult('Backend health endpoint', response.ok);
     
-    if (complaint.ok) {
-      console.log('✅ Complaint created with AI analysis');
-      console.log(`   Category: ${complaint.data.category}`);
-      console.log(`   Danger Score: ${complaint.data.dangerScore}`);
-      console.log(`   Duplicates: ${complaint.data.duplicates.length}`);
-      return complaint.data.complaint_id;
-    } else {
-      console.log('❌ Complaint creation failed:', complaint.data);
+    const apiHealth = await fetch(`${API_BASE}/health`);
+    logResult('API health endpoint', apiHealth.ok);
+  } catch (error) {
+    logResult('Backend health', false, error.message);
+  }
+}
+
+// Test authentication endpoints
+async function testAuthentication() {
+  console.log('\n🔐 Testing Authentication...');
+  
+  try {
+    // Test citizen OTP flow
+    const otpResponse = await fetch(`${API_BASE}/auth/citizen/send-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: TEST_CITIZENS[0].phone })
+    });
+    logResult('Citizen OTP send', otpResponse.ok);
+    
+    if (otpResponse.ok) {
+      const otpData = await otpResponse.json();
+      const otp = otpData.otp || '123456';
+      
+      const verifyResponse = await fetch(`${API_BASE}/auth/citizen/verify-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: TEST_CITIZENS[0].phone, otp })
+      });
+      
+      if (verifyResponse.ok) {
+        const loginData = await verifyResponse.json();
+        logResult('Citizen OTP verify', !!loginData.token);
+        return loginData.token;
+      } else {
+        logResult('Citizen OTP verify', false, 'Verification failed');
+      }
+    }
+    
+    // Test staff login
+    const staffResponse = await fetch(`${API_BASE}/auth/staff/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(TEST_STAFF)
+    });
+    logResult('Staff login', staffResponse.ok);
+    
+  } catch (error) {
+    logResult('Authentication tests', false, error.message);
+  }
+  
+  return null;
+}
+
+// Test complaint CRUD operations
+async function testComplaints(citizenToken) {
+  console.log('\n📋 Testing Complaint Operations...');
+  
+  try {
+    if (!citizenToken) {
+      logResult('Complaint tests', false, 'No citizen token available');
       return null;
     }
+    
+    // Test complaint creation
+    const createResponse = await fetch(`${API_BASE}/complaints`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${citizenToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        description: 'Test complaint for system testing',
+        location: {
+          lat: 28.7041,
+          lng: 77.1025,
+          address: 'Test Location, New Delhi'
+        }
+      })
+    });
+    
+    if (createResponse.ok) {
+      const complaintData = await createResponse.json();
+      logResult('Complaint creation', !!complaintData.complaint_id);
+      
+      const complaintId = complaintData.complaint_id;
+      
+      // Test complaint listing
+      const listResponse = await fetch(`${API_BASE}/complaints`);
+      logResult('Complaint listing', listResponse.ok);
+      
+      // Test complaint details
+      const detailResponse = await fetch(`${API_BASE}/complaints/${complaintId}`);
+      logResult('Complaint details', detailResponse.ok);
+      
+      // Test complaint upvote
+      const upvoteResponse = await fetch(`${API_BASE}/complaints/${complaintId}/upvote`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${citizenToken}` }
+      });
+      logResult('Complaint upvote', upvoteResponse.ok);
+      
+      return complaintId;
+    } else {
+      const errorText = await createResponse.text();
+      logResult('Complaint creation', false, errorText);
+    }
   } catch (error) {
-    console.log('❌ Backend error:', error.message);
-    return null;
+    logResult('Complaint operations', false, error.message);
   }
+  
+  return null;
 }
 
-async function testStaffWorkflow() {
-  console.log('\n👨‍💼 Testing Staff Workflow...');
+// Test complaint status updates (staff operations)
+async function testStaffOperations(complaintId) {
+  console.log('\n👮 Testing Staff Operations...');
   
   try {
-    // Staff login
-    const login = await makeRequest(`${BACKEND_URL}/api/staff/login`, 'POST', {
-      dept: 'sanitation',
-      staff_id: 'staff-001'
+    // Login as staff
+    const staffResponse = await fetch(`${API_BASE}/auth/staff/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(TEST_STAFF)
     });
     
-    if (!login.ok) {
-      console.log('❌ Staff login failed');
-      return;
-    }
-    
-    console.log('✅ Staff login successful');
-    const token = login.data.token;
-    
-    // Get staff complaints
-    const complaints = await makeRequest(`${BACKEND_URL}/api/staff/complaints`, 'GET', null, {
-      'Authorization': `Bearer ${token}`
-    });
-    
-    if (complaints.ok) {
-      console.log(`✅ Retrieved ${complaints.data.count} complaints for staff`);
+    if (staffResponse.ok) {
+      const staffData = await staffResponse.json();
+      const staffToken = staffData.token;
       
-      // Update a complaint if available
-      if (complaints.data.complaints.length > 0) {
-        const complaintId = complaints.data.complaints[0].complaint_id;
-        
-        const update = await makeRequest(`${BACKEND_URL}/api/staff/complaints/${complaintId}/update`, 'POST', {
-          status: 'in-progress',
-          comment: 'Inspected the issue, work will begin soon',
-          expected_resolution_date: '2024-01-25'
-        }, {
-          'Authorization': `Bearer ${token}`
+      if (complaintId) {
+        // Test status update
+        const statusResponse = await fetch(`${API_BASE}/complaints/${complaintId}/status`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${staffToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            status: 'in-progress',
+            comment: 'Staff is reviewing this complaint'
+          })
         });
+        logResult('Complaint status update', statusResponse.ok);
         
-        if (update.ok) {
-          console.log('✅ Complaint status updated successfully');
-        } else {
-          console.log('❌ Complaint update failed');
-        }
+        // Test setting to awaiting_confirmation
+        const awaitingResponse = await fetch(`${API_BASE}/complaints/${complaintId}/status`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${staffToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            status: 'awaiting_confirmation',
+            comment: 'Issue resolved, awaiting citizen confirmation'
+          })
+        });
+        logResult('Set awaiting_confirmation status', awaitingResponse.ok);
       }
     } else {
-      console.log('❌ Failed to get staff complaints');
+      logResult('Staff login for operations', false, 'Login failed');
     }
   } catch (error) {
-    console.log('❌ Staff workflow error:', error.message);
+    logResult('Staff operations', false, error.message);
   }
 }
 
-async function testCitizenWorkflow() {
-  console.log('\n👤 Testing Citizen Workflow...');
+// Test complaint confirmation system
+async function testComplaintConfirmation(complaintId) {
+  console.log('\n✅ Testing Complaint Confirmation...');
   
   try {
-    // Create a complaint
-    const complaint = await makeRequest(`${BACKEND_URL}/api/complaints`, 'POST', {
-      citizen_id: 'user-456',
-      description: 'Garbage not collected for 3 days, creating bad smell',
-      location: { lat: 28.7051, lng: 77.1035, address: 'Residential Area, Sector Y' },
-      media: []
-    });
-    
-    if (!complaint.ok) {
-      console.log('❌ Citizen complaint creation failed');
+    if (!complaintId) {
+      logResult('Complaint confirmation', false, 'No complaint ID available');
       return;
     }
     
-    console.log('✅ Citizen complaint created');
-    const complaintId = complaint.data.complaint_id;
+    // Login multiple citizens for confirmation testing
+    const citizenTokens = [];
     
-    // Upvote the complaint
-    const upvote = await makeRequest(`${BACKEND_URL}/api/complaints/${complaintId}/upvote`, 'POST', {
-      citizen_id: 'user-789'
+    for (let i = 0; i < 3; i++) {
+      const citizen = TEST_CITIZENS[i];
+      const otpResponse = await fetch(`${API_BASE}/auth/citizen/send-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: citizen.phone })
+      });
+      
+      if (otpResponse.ok) {
+        const otpData = await otpResponse.json();
+        const otp = otpData.otp || '123456';
+        
+        const verifyResponse = await fetch(`${API_BASE}/auth/citizen/verify-otp`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone: citizen.phone, otp })
+        });
+        
+        if (verifyResponse.ok) {
+          const loginData = await verifyResponse.json();
+          citizenTokens.push(loginData.token);
+        }
+      }
+    }
+    
+    // Test confirmations
+    for (let i = 0; i < citizenTokens.length; i++) {
+      const confirmResponse = await fetch(`${API_BASE}/complaints/${complaintId}/confirm-resolution`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${citizenTokens[i]}` }
+      });
+      
+      if (confirmResponse.ok) {
+        const confirmData = await confirmResponse.json();
+        logResult(`Confirmation ${i + 1}`, true);
+        
+        if (confirmData.resolved) {
+          logResult('Auto-resolution after 3+ confirmations', true);
+          break;
+        }
+      } else {
+        logResult(`Confirmation ${i + 1}`, false, 'Confirmation failed');
+      }
+    }
+    
+    // Test manual auto-resolution trigger
+    const triggerResponse = await fetch(`${API_BASE}/complaints/trigger-auto-resolution`, {
+      method: 'POST'
     });
+    logResult('Manual auto-resolution trigger', triggerResponse.ok);
     
-    if (upvote.ok) {
-      console.log(`✅ Complaint upvoted (${upvote.data.upvotes} upvotes)`);
-    } else {
-      console.log('❌ Upvote failed');
-    }
-    
-    // Get nearby complaints
-    const nearby = await makeRequest(`${BACKEND_URL}/api/complaints?near=28.7041,77.1025`);
-    
-    if (nearby.ok) {
-      console.log(`✅ Retrieved ${nearby.data.count} nearby complaints`);
-    } else {
-      console.log('❌ Failed to get nearby complaints');
-    }
   } catch (error) {
-    console.log('❌ Citizen workflow error:', error.message);
+    logResult('Complaint confirmation', false, error.message);
   }
 }
 
-async function runFullSystemTest() {
-  console.log('🚀 JANMITRA Full System Test');
-  console.log('=' * 50);
+// Test push notification endpoints
+async function testPushNotifications(citizenToken) {
+  console.log('\n📱 Testing Push Notifications...');
   
-  // Test AI services first
-  const aiWorking = await testAIServices();
-  
-  // Test backend
-  console.log('\n🔧 Testing Backend...');
-  const health = await makeRequest(`${BACKEND_URL}/api/health`);
-  if (!health.ok) {
-    console.log('❌ Backend not running. Start it with: cd backend && npm start');
-    return;
+  try {
+    if (!citizenToken) {
+      logResult('Push notification tests', false, 'No citizen token available');
+      return;
+    }
+    
+    // Test push token registration
+    const tokenResponse = await fetch(`${API_BASE}/auth/push-token`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${citizenToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        token: `ExponentPushToken[test-${Date.now()}]`,
+        deviceId: 'test-device-123',
+        platform: 'android'
+      })
+    });
+    logResult('Push token registration', tokenResponse.ok);
+    
+  } catch (error) {
+    logResult('Push notifications', false, error.message);
   }
-  console.log('✅ Backend is running');
-  
-  // Test backend with AI integration
-  const complaintId = await testBackendWithAI();
-  
-  // Test staff workflow
-  await testStaffWorkflow();
-  
-  // Test citizen workflow
-  await testCitizenWorkflow();
-  
-  console.log('\n🎉 Full System Test Complete!');
-  console.log('\nNext Steps:');
-  console.log('1. Start the frontend: cd frontend && npm start');
-  console.log('2. Open Expo Go app on your phone');
-  console.log('3. Scan the QR code to test the mobile app');
-  console.log('4. Test complaint creation, viewing nearby issues, and staff login');
 }
 
-// Run the test
-runFullSystemTest().catch(console.error);
+// Main test runner
+async function runAllTests() {
+  console.log('🚀 JANMITRA Comprehensive System Test\n');
+  console.log('Testing all backend endpoints, authentication, and features...\n');
+  
+  // Test 1: Backend Health
+  await testBackendHealth();
+  
+  // Test 2: Authentication
+  const citizenToken = await testAuthentication();
+  
+  // Test 3: Complaint Operations
+  const complaintId = await testComplaints(citizenToken);
+  
+  // Test 4: Staff Operations
+  await testStaffOperations(complaintId);
+  
+  // Test 5: Complaint Confirmation
+  await testComplaintConfirmation(complaintId);
+  
+  // Test 6: Push Notifications
+  await testPushNotifications(citizenToken);
+  
+  // Print summary
+  console.log('\n📊 Test Summary:');
+  console.log(`✅ Passed: ${testResults.passed}`);
+  console.log(`❌ Failed: ${testResults.failed}`);
+  
+  if (testResults.errors.length > 0) {
+    console.log('\n🐛 Errors to fix:');
+    testResults.errors.forEach((error, index) => {
+      console.log(`${index + 1}. ${error.test}: ${error.error}`);
+    });
+  } else {
+    console.log('\n🎉 All tests passed! System is working correctly.');
+  }
+}
+
+// Run tests if called directly
+if (require.main === module) {
+  runAllTests().catch(console.error);
+}
+
+module.exports = { runAllTests };

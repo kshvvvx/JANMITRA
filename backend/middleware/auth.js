@@ -50,8 +50,8 @@ const authenticateToken = async (req, res, next) => {
     }
 
     if (!user) {
-      return res.status(403).json({
-        error: 'User not found'
+      return res.status(401).json({
+        error: 'Authentication required'
       });
     }
 
@@ -102,12 +102,41 @@ const requireRole = (allowedRoles) => {
   };
 };
 
-// Specific role middlewares
-const requireCitizen = requireRole(['citizen']);
-const requireStaff = requireRole(['staff']);
-const requireSupervisor = requireRole(['supervisor']);
-const requireStaffOrSupervisor = requireRole(['staff', 'supervisor']);
-const requireAnyUser = requireRole(['citizen', 'staff', 'supervisor']);
+// Specific role middlewares - functions that combine auth and role checks
+const requireCitizen = (req, res, next) => {
+  authenticateToken(req, res, (authErr) => {
+    if (authErr) return;
+    requireRole(['citizen'])(req, res, next);
+  });
+};
+
+const requireStaff = (req, res, next) => {
+  authenticateToken(req, res, (err) => {
+    if (err) return next(err);
+    requireRole(['staff'])(req, res, next);
+  });
+};
+
+const requireSupervisor = (req, res, next) => {
+  authenticateToken(req, res, (err) => {
+    if (err) return next(err);
+    requireRole(['supervisor'])(req, res, next);
+  });
+};
+
+const requireStaffOrSupervisor = (req, res, next) => {
+  authenticateToken(req, res, (err) => {
+    if (err) return next(err);
+    requireRole(['staff', 'supervisor'])(req, res, next);
+  });
+};
+
+const requireAnyUser = (req, res, next) => {
+  authenticateToken(req, res, (err) => {
+    if (err) return next(err);
+    requireRole(['citizen', 'staff', 'supervisor'])(req, res, next);
+  });
+};
 
 module.exports = {
   generateToken,

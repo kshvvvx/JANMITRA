@@ -8,6 +8,7 @@ const database = require('./config/database');
 const complaintsRouter = require('./routes/complaints');
 const staffRouter = require('./routes/staff');
 const authRouter = require('./routes/auth');
+const { startComplaintAutoResolutionJob } = require('./utils/cronJobs');
 
 const app = express();
 app.use(cors());
@@ -46,6 +47,11 @@ app.use('/api/complaints', complaintsRouter);
 app.use('/api/staff', staffRouter);
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Backend listening on http://localhost:${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Backend listening on http://localhost:${PORT}`);
+  
+  // Start cron jobs after server is running
+  startComplaintAutoResolutionJob();
+});
 
 module.exports = app;
