@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, StyleSheet, ScrollView, Alert, Image } from 'react-native';
 import { Text, Button, Card, Divider } from 'react-native-paper';
-// import { Audio } from 'expo-av';
+import { Audio } from 'expo-av';
 import { ThemedView } from '@/components/themed-view';
 import { ThemedText } from '@/components/themed-text';
 import { useRouter, useLocalSearchParams } from 'expo-router';

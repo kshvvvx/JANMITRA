@@ -99,4 +99,7 @@ export const API_ENDPOINTS = {
   UPDATE_COMPLAINT_STATUS: (id: string) => `${API_BASE_URL}/complaints/${id}/status`,
   REFILE_COMPLAINT: (id: string) => `${API_BASE_URL}/complaints/${id}/refile`,
   CONFIRM_RESOLUTION: (id: string) => `${API_BASE_URL}/complaints/${id}/confirm_resolution`,
+  
+  // Push notification endpoints
+  SAVE_PUSH_TOKEN: `${API_BASE_URL}/auth/push-token`,
 };

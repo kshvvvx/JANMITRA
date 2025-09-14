@@ -4,6 +4,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { Citizen, Staff, Supervisor } = require('../models');
+const PushToken = require('../models/PushToken');
 const { generateToken, authenticateToken, requireAnyUser } = require('../middleware/auth');
 
 const router = express.Router();
@@ -333,6 +334,71 @@ router.post('/logout', authenticateToken, (req, res) => {
     res.status(500).json({
       error: 'Internal server error'
     });
+  }
+});
+
+// Save push token endpoint
+router.post('/push-token', authenticateToken, async (req, res) => {
+  try {
+    const { token, deviceId, platform } = req.body;
+    const { userId, role } = req.user;
+
+    if (!token || !deviceId || !platform) {
+      return res.status(400).json({ 
+        error: 'Token, deviceId, and platform are required' 
+      });
+    }
+
+    // Deactivate existing tokens for this device
+    await PushToken.updateMany(
+      { userId, deviceId, userType: role },
+      { isActive: false }
+    );
+
+    // Create new token record
+    const pushToken = new PushToken({
+      token,
+      userId,
+      userType: role,
+      deviceId,
+      platform,
+      isActive: true,
+      lastUsed: new Date()
+    });
+
+    await pushToken.save();
+
+    res.json({ 
+      success: true, 
+      message: 'Push token saved successfully' 
+    });
+
+  } catch (error) {
+    console.error('Save push token error:', error);
+    res.status(500).json({ error: 'Failed to save push token' });
+  }
+});
+
+// Get user's push tokens (for debugging)
+router.get('/push-tokens', authenticateToken, async (req, res) => {
+  try {
+    const { userId, role } = req.user;
+    
+    const tokens = await PushToken.findActiveTokensForUser(userId, role);
+    
+    res.json({ 
+      tokens: tokens.map(t => ({
+        id: t._id,
+        deviceId: t.deviceId,
+        platform: t.platform,
+        lastUsed: t.lastUsed,
+        createdAt: t.createdAt
+      }))
+    });
+
+  } catch (error) {
+    console.error('Get push tokens error:', error);
+    res.status(500).json({ error: 'Failed to get push tokens' });
   }
 });
 

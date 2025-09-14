@@ -6,6 +6,7 @@ const router = express.Router();
 const { Complaint, Citizen } = require('../models');
 const { calculateDistance } = require('../utils/geo');
 const { authenticateToken, requireCitizen, requireStaff, requireSupervisor, requireStaffOrSupervisor } = require('../middleware/auth');
+const { notifyComplaintStatusChange, notifyComplaintUpvoted, notifyStaffNewComplaint } = require('../utils/notifications');
 const { uploadMultiple, handleUploadError, processUploadedFiles } = require('../middleware/upload');
 
 // Create a new complaint (citizens only)
@@ -107,6 +108,17 @@ router.post('/', requireCitizen, uploadMultiple, handleUploadError, async (req, 
     });
 
     const savedComplaint = await complaint.save();
+
+    // Send push notification to staff about new complaint
+    try {
+      await notifyStaffNewComplaint(
+        savedComplaint.complaint_id,
+        description,
+        location?.address || 'Unknown location'
+      );
+    } catch (error) {
+      console.error('Failed to send staff notification:', error);
+    }
 
     // Update citizen's complaints_filed array
     try {
@@ -409,6 +421,21 @@ router.post('/:id/upvote', requireCitizen, async (req, res) => {
     // Add upvote using schema method
     await complaint.addUpvote(citizen_id);
 
+    // Send push notification to complaint owner about upvote
+    try {
+      const upvoteCount = complaint.upvotes.length;
+      // Only notify on milestone upvotes to avoid spam
+      if (upvoteCount === 1 || upvoteCount === 5 || upvoteCount === 10 || upvoteCount % 25 === 0) {
+        await notifyComplaintUpvoted(
+          id,
+          complaint.citizen_id,
+          upvoteCount
+        );
+      }
+    } catch (error) {
+      console.error('Failed to send upvote notification:', error);
+    }
+
     // Update citizen's upvotes_given array
     try {
       await Citizen.findOneAndUpdate(
@@ -503,13 +530,32 @@ router.post('/:id/refile', requireCitizen, async (req, res) => {
     });
 
     // Add refile action to history
-    await complaint.addAction({
-      actorType: 'citizen',
-      action: 'complaint_refiled',
-      comment: description ? 'Complaint refiled with updated description and new media' : 'Complaint refiled with new media'
+    // Store old status for notification
+    const oldStatus = complaint.status;
+
+    // Update the complaint
+    complaint.status = status;
+    complaint.actions.push({
+      action: 'status_updated',
+      performed_by: req.user.userId,
+      performed_at: new Date(),
+      comment: comment || `Status changed to ${status}`
     });
 
     await complaint.save();
+
+    // Send push notification to citizen about status change
+    try {
+      await notifyComplaintStatusChange(
+        id,
+        complaint.citizen_id,
+        oldStatus,
+        status,
+        comment
+      );
+    } catch (error) {
+      console.error('Failed to send status change notification:', error);
+    }
 
     res.json({
       complaint_id: id,

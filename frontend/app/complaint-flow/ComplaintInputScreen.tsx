@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, StyleSheet, ScrollView, Alert } from 'react-native';
-import { Text, Button, Card, TextInput } from 'react-native-paper';
-// import { Audio } from 'expo-av';
+import { Text, Button, Card, TextInput, IconButton } from 'react-native-paper';
+import { Audio } from 'expo-av';
 import { ThemedView } from '@/components/themed-view';
 import { ThemedText } from '@/components/themed-text';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -9,36 +9,86 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 export default function ComplaintInputScreen() {
   const [inputMethod, setInputMethod] = useState<'text' | 'voice'>('text');
   const [description, setDescription] = useState('');
-  // Audio recording state - disabled until expo-av is installed
-  // Audio recording state - disabled until expo-av is installed
-  // const [recording, setRecording] = useState<any>(null);
-  // const [recordingUri, setRecordingUri] = useState<string | null>(null);
-  // const [isRecording, setIsRecording] = useState(false);
-  // const [isPlaying, setIsPlaying] = useState(false);
+  // Audio recording state
+  const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingUri, setRecordingUri] = useState<string | null>(null);
+  const [sound, setSound] = useState<Audio.Sound | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
   
   const router = useRouter();
   const params = useLocalSearchParams();
 
-  // Audio recording functions disabled until expo-av is installed
-  // const startRecording = async () => {
-  //   Alert.alert('Feature Unavailable', 'Audio recording requires expo-av package. Please install dependencies first.');
-  //   return;
-  // };
+  // Audio recording functions
+  const startRecording = async () => {
+    try {
+      const permission = await Audio.requestPermissionsAsync();
+      if (permission.status !== 'granted') {
+        Alert.alert('Permission Required', 'Please grant microphone permission to record audio.');
+        return;
+      }
 
-  // const stopRecording = async () => {
-  //   Alert.alert('Feature Unavailable', 'Audio recording requires expo-av package.');
-  //   return;
-  // };
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
 
-  // const playRecording = async () => {
-  //   Alert.alert('Feature Unavailable', 'Audio playback requires expo-av package.');
-  //   return;
-  // };
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+      setRecording(recording);
+      setIsRecording(true);
+    } catch (err) {
+      console.error('Failed to start recording', err);
+      Alert.alert('Error', 'Failed to start recording');
+    }
+  };
 
-  // const deleteRecording = () => {
-  //   Alert.alert('Feature Unavailable', 'Audio management requires expo-av package.');
-  //   return;
-  // };
+  const stopRecording = async () => {
+    if (!recording) return;
+
+    try {
+      setIsRecording(false);
+      await recording.stopAndUnloadAsync();
+      const uri = recording.getURI();
+      setRecordingUri(uri);
+      setRecording(null);
+    } catch (err) {
+      console.error('Failed to stop recording', err);
+      Alert.alert('Error', 'Failed to stop recording');
+    }
+  };
+
+  const playRecording = async () => {
+    if (!recordingUri) return;
+
+    try {
+      if (sound) {
+        await sound.unloadAsync();
+      }
+      
+      const { sound: newSound } = await Audio.Sound.createAsync(
+        { uri: recordingUri },
+        { shouldPlay: true }
+      );
+      setSound(newSound);
+      setIsPlaying(true);
+      
+      newSound.setOnPlaybackStatusUpdate((status) => {
+        if (status.isLoaded && status.didJustFinish) {
+          setIsPlaying(false);
+        }
+      });
+    } catch (err) {
+      console.error('Failed to play recording', err);
+      Alert.alert('Error', 'Failed to play recording');
+    }
+  };
+
+  const deleteRecording = () => {
+    setRecordingUri(null);
+    setIsPlaying(false);
+  };
 
   const handleNext = () => {
     if (inputMethod === 'text' && !description.trim()) {
@@ -46,9 +96,9 @@ export default function ComplaintInputScreen() {
       return;
     }
 
-    // Voice recording validation disabled until expo-av is installed
-    if (inputMethod === 'voice') {
-      Alert.alert('Feature Unavailable', 'Voice recording requires expo-av package.');
+    // Voice recording validation
+    if (inputMethod === 'voice' && !recordingUri) {
+      Alert.alert('Error', 'Please record a voice note describing the issue.');
       return;
     }
     
@@ -59,7 +109,7 @@ export default function ComplaintInputScreen() {
 
     const complaintData = {
       description: inputMethod === 'text' ? description.trim() : null,
-      voiceNote: null, // Voice recording disabled until expo-av is installed
+      voiceNote: recordingUri,
       inputMethod
     };
 
@@ -158,7 +208,6 @@ export default function ComplaintInputScreen() {
           </Card>
         )}
         
-        {/* Original Voice Recording UI - Commented out until expo-av is installed
         {inputMethod === 'voice' && (
           <Card style={styles.card} mode="outlined">
             <Card.Content>
@@ -209,7 +258,6 @@ export default function ComplaintInputScreen() {
             </Card.Content>
           </Card>
         )}
-        */}
       </ScrollView>
 
       {/* Navigation Buttons */}

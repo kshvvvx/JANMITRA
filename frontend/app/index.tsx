@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { router } from 'expo-router';
+import { addNotificationReceivedListener, addNotificationResponseReceivedListener } from '@/utils/notifications';
 import { isAuthenticated } from '../utils/auth';
 
 const IndexScreen = () => {
@@ -12,15 +13,12 @@ const IndexScreen = () => {
         const authenticated = await isAuthenticated();
         
         if (authenticated) {
-          // User is logged in, redirect to main app
           router.replace('/(tabs)');
         } else {
-          // User is not logged in, redirect to citizen login
           router.replace('/auth/citizen-login');
         }
       } catch (error) {
-        console.error('Error checking auth status:', error);
-        // On error, redirect to login
+        console.error('Auth check error:', error);
         router.replace('/auth/citizen-login');
       } finally {
         setChecking(false);
@@ -28,6 +26,32 @@ const IndexScreen = () => {
     };
 
     checkAuthStatus();
+
+    // Set up notification listeners
+    const notificationListener = addNotificationReceivedListener((notification) => {
+      console.log('Notification received:', notification);
+      // Handle notification received while app is running
+    });
+
+    const responseListener = addNotificationResponseReceivedListener((response) => {
+      console.log('Notification response:', response);
+      // Handle notification tap
+      const data = response.notification.request.content.data;
+      
+      if (data?.type === 'complaint_status_change' && data?.complaintId) {
+        router.push(`/complaint-detail?id=${data.complaintId}`);
+      } else if (data?.type === 'new_complaint' && data?.complaintId) {
+        router.push(`/complaint-detail?id=${data.complaintId}`);
+      } else if (data?.type === 'complaint_upvoted' && data?.complaintId) {
+        router.push(`/complaint-detail?id=${data.complaintId}`);
+      }
+    });
+
+    // Cleanup listeners on unmount
+    return () => {
+      notificationListener.remove();
+      responseListener.remove();
+    };
   }, []);
 
   if (checking) {

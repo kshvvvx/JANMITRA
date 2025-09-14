@@ -51,6 +51,14 @@
           "photosPermission": "Allow JANMITRA to access your photos to attach evidence to civic issue reports.",
           "cameraPermission": "Allow JANMITRA to use your camera to capture photos of civic issues."
         }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#ffffff",
+          "sounds": ["./assets/notification-sound.wav"]
+        }
       ]
     ],
     "extra": {

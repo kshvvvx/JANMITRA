@@ -7,7 +7,7 @@ const path = require('path');
 const database = require('./config/database');
 const complaintsRouter = require('./routes/complaints');
 const staffRouter = require('./routes/staff');
-const authRouter = require('./routes/auth-simple');
+const authRouter = require('./routes/auth');
 
 const app = express();
 app.use(cors());

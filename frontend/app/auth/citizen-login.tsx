@@ -11,6 +11,8 @@ import {
   Platform,
 } from 'react-native';
 import { router } from 'expo-router';
+import { API_ENDPOINTS, authenticatedFetch } from '@/utils/auth';
+import { registerForPushNotificationsAsync, savePushTokenToBackend } from '@/utils/notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const CitizenLoginScreen = () => {
@@ -78,6 +80,16 @@ const CitizenLoginScreen = () => {
         // Store JWT token and user info
         await AsyncStorage.setItem('authToken', data.token);
         await AsyncStorage.setItem('userInfo', JSON.stringify(data.user));
+        
+        // Register for push notifications
+        try {
+          const pushToken = await registerForPushNotificationsAsync();
+          if (pushToken) {
+            await savePushTokenToBackend(pushToken, data.user.citizen_id);
+          }
+        } catch (error) {
+          console.error('Failed to register push notifications:', error);
+        }
         
         Alert.alert('Success', 'Login successful!', [
           {
