@@ -40,8 +40,11 @@ console.log('Mounting auth router...');
 app.use('/api/auth', authRouter);
 console.log('Auth router mounted successfully');
 
-// Mount complaints router
-app.use('/api/complaints', complaintsRouter);
+// Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/complaints', complaintRoutes);
+app.use('/api/departments', require('./routes/departments'));
+app.use('/api/supervisor', require('./routes/supervisor'));
 
 // Mount staff router
 app.use('/api/staff', staffRouter);

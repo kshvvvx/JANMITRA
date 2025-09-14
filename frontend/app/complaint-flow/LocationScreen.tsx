@@ -1,36 +1,31 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, Alert, ScrollView } from 'react-native';
+import { View, StyleSheet, Alert, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
 import { Text, Button, Card, Switch, TextInput } from 'react-native-paper';
-// import { Picker } from '@react-native-picker/picker';
 import * as Location from 'expo-location';
 import { ThemedView } from '@/components/themed-view';
 import { ThemedText } from '@/components/themed-text';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import LocationSelector from '@/components/LocationSelector';
 
-// Commented out for now - will be used when Picker component is available
-// const STATES = [
-//   'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh',
-//   'Delhi', 'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand',
-//   'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur',
-//   'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan',
-//   'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh',
-//   'Uttarakhand', 'West Bengal'
-// ];
-
-// const CITIES: { [key: string]: string[] } = {
-//   'Delhi': ['New Delhi', 'Central Delhi', 'North Delhi', 'South Delhi', 'East Delhi', 'West Delhi'],
-//   'Maharashtra': ['Mumbai', 'Pune', 'Nagpur', 'Nashik', 'Aurangabad'],
-//   'Karnataka': ['Bangalore', 'Mysore', 'Hubli', 'Mangalore', 'Belgaum'],
-//   'Tamil Nadu': ['Chennai', 'Coimbatore', 'Madurai', 'Tiruchirappalli', 'Salem'],
-//   'Gujarat': ['Ahmedabad', 'Surat', 'Vadodara', 'Rajkot', 'Bhavnagar'],
-// };
+// Location state interface
+interface LocationData {
+  state: string;
+  city: string;
+  area: string;
+  stateId: string;
+  cityId: string;
+}
 
 export default function LocationScreen() {
   const [useCurrentLocation, setUseCurrentLocation] = useState(true);
   const [currentLocation, setCurrentLocation] = useState<any>(null);
-  const [selectedState, setSelectedState] = useState('');
-  const [selectedCity, setSelectedCity] = useState('');
-  const [selectedArea, setSelectedArea] = useState('');
+  const [locationData, setLocationData] = useState<LocationData>({
+    state: '',
+    city: '',
+    area: '',
+    stateId: '',
+    cityId: ''
+  });
   const [extraDetails, setExtraDetails] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   
@@ -76,23 +71,25 @@ export default function LocationScreen() {
   };
 
   const handleNext = () => {
-    let locationData;
+    let locationPayload;
 
     if (useCurrentLocation) {
       if (!currentLocation) {
         Alert.alert('Error', 'Please wait for location to be fetched or switch to manual entry.');
         return;
       }
-      locationData = currentLocation;
+      locationPayload = currentLocation;
     } else {
-      if (!selectedState || !selectedCity || !selectedArea) {
+      if (!locationData.state || !locationData.city || !locationData.area) {
         Alert.alert('Error', 'Please fill in all location fields.');
         return;
       }
-      locationData = {
+      locationPayload = {
         lat: null,
         lng: null,
-        address: `${selectedArea}, ${selectedCity}, ${selectedState}${extraDetails ? `, ${extraDetails}` : ''}`
+        address: `${locationData.area}, ${locationData.city}, ${locationData.state}${extraDetails ? `, ${extraDetails}` : ''}`,
+        stateId: locationData.stateId,
+        cityId: locationData.cityId
       };
     }
 
@@ -100,7 +97,7 @@ export default function LocationScreen() {
       pathname: '/complaint-flow/ComplaintInputScreen',
       params: {
         media: params.media,
-        location: JSON.stringify(locationData),
+        location: JSON.stringify(locationPayload),
         step: '3'
       }
     });
@@ -110,11 +107,21 @@ export default function LocationScreen() {
     router.back();
   };
 
-  // const availableCities = selectedState ? CITIES[selectedState] || [] : [];
+  const handleLocationSelect = (location: LocationData) => {
+    setLocationData(location);
+  };
 
   return (
     <ThemedView style={styles.container}>
-      <ScrollView style={styles.scrollView}>
+      <KeyboardAvoidingView 
+        style={styles.keyboardAvoidingView}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={100}
+      >
+      <ScrollView 
+        style={styles.scrollView}
+        keyboardShouldPersistTaps="handled"
+      >
         {/* Header */}
         <View style={styles.header}>
           <ThemedText type="title" style={styles.headerTitle}>
@@ -172,70 +179,35 @@ export default function LocationScreen() {
 
         {/* Manual Location Entry */}
         {!useCurrentLocation && (
-          <>
-            <Card style={styles.card} mode="outlined">
-              <Card.Content>
-                <Text variant="titleMedium" style={styles.sectionTitle}>
-                  Select State
-                </Text>
-                <TextInput
-                  mode="outlined"
-                  placeholder="Select State (manual entry for now)"
-                  value={selectedState}
-                  onChangeText={setSelectedState}
-                  style={styles.textInput}
-                />
-              </Card.Content>
-            </Card>
+          <Card style={[styles.card, styles.manualEntryCard]} mode="outlined">
+            <Card.Content>
+              <Text variant="titleMedium" style={styles.sectionTitle}>
+                Enter Location Manually
+              </Text>
+              
+              <LocationSelector 
+                onLocationSelect={handleLocationSelect}
+                showSearch={true}
+                style={styles.locationSelector}
+              />
 
-            <Card style={styles.card} mode="outlined">
-              <Card.Content>
-                <Text variant="titleMedium" style={styles.sectionTitle}>
-                  Select City
-                </Text>
+              <View style={styles.pickerContainer}>
+                <Text style={styles.label}>Landmark (Optional)</Text>
                 <TextInput
-                  mode="outlined"
-                  placeholder="Select City (manual entry for now)"
-                  value={selectedCity}
-                  onChangeText={setSelectedCity}
-                  style={styles.textInput}
-                  editable={!!selectedState}
-                />
-              </Card.Content>
-            </Card>
-
-            <Card style={styles.card} mode="outlined">
-              <Card.Content>
-                <Text variant="titleMedium" style={styles.sectionTitle}>
-                  Area/Locality
-                </Text>
-                <TextInput
-                  mode="outlined"
-                  placeholder="Enter area or locality"
-                  value={selectedArea}
-                  onChangeText={setSelectedArea}
-                  style={styles.textInput}
-                />
-              </Card.Content>
-            </Card>
-
-            <Card style={styles.card} mode="outlined">
-              <Card.Content>
-                <Text variant="titleMedium" style={styles.sectionTitle}>
-                  Additional Details (Optional)
-                </Text>
-                <TextInput
-                  mode="outlined"
-                  placeholder="Landmark, street name, etc."
                   value={extraDetails}
                   onChangeText={setExtraDetails}
-                  style={styles.textInput}
+                  placeholder="E.g., Near Central Park, Behind Mall"
+                  style={[styles.pickerInput, styles.textArea]}
+                  mode="outlined"
+                  multiline
+                  numberOfLines={3}
                 />
-              </Card.Content>
-            </Card>
-          </>
+              </View>
+            </Card.Content>
+          </Card>
         )}
       </ScrollView>
+      </KeyboardAvoidingView>
 
       {/* Navigation Buttons */}
       <View style={styles.navigationContainer}>
@@ -260,6 +232,9 @@ export default function LocationScreen() {
 }
 
 const styles = StyleSheet.create({
+  keyboardAvoidingView: {
+    flex: 1,
+  },
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
@@ -286,6 +261,9 @@ const styles = StyleSheet.create({
   card: {
     margin: 16,
     backgroundColor: '#fff',
+  },
+  manualEntryCard: {
+    marginTop: 16,
   },
   sectionTitle: {
     marginBottom: 12,
@@ -338,7 +316,24 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   nextButton: {
-    flex: 2,
+    flex: 1,
+    marginLeft: 8,
     backgroundColor: '#2196f3',
+  },
+  locationSelector: {
+    marginBottom: 16,
+  },
+  label: {
+    fontSize: 14,
+    marginBottom: 4,
+    color: '#333',
+  },
+  pickerInput: {
+    backgroundColor: '#fff',
+    marginBottom: 12,
+  },
+  textArea: {
+    minHeight: 80,
+    textAlignVertical: 'top',
   },
 });

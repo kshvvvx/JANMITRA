@@ -36,6 +36,31 @@ const actionSchema = new mongoose.Schema({
     enum: ['citizen', 'staff', 'supervisor'],
     required: true
   },
+  confirmations: [{
+    citizen_id: {
+      type: String,
+      required: true
+    },
+    confirmed_at: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  citizen_votes: [{
+    citizen_id: {
+      type: String,
+      required: true
+    },
+    vote: {
+      type: String,
+      enum: ['yes', 'refile'],
+      required: true
+    },
+    voted_at: {
+      type: Date,
+      default: Date.now
+    }
+  }],
   action: {
     type: String,
     required: true
@@ -94,7 +119,8 @@ const complaintSchema = new mongoose.Schema({
   media: [mediaSchema],
   status: {
     type: String,
-    enum: ['unresolved', 'in-progress', 'awaiting_confirmation', 'resolved'],
+    required: true,
+    enum: ['unresolved', 'in-progress', 'awaiting_confirmation', 'awaiting_citizen_confirmation', 'resolved'],
     default: 'unresolved',
     index: true
   },
@@ -113,6 +139,21 @@ const complaintSchema = new mongoose.Schema({
   confirmations: [{
     type: String, // citizen_id of confirmers
     required: true
+  }],
+  citizen_votes: [{
+    citizen_id: {
+      type: String,
+      required: true
+    },
+    vote: {
+      type: String,
+      enum: ['yes', 'refile'],
+      required: true
+    },
+    voted_at: {
+      type: Date,
+      default: Date.now
+    }
   }],
   resolved_at: {
     type: Date,
@@ -161,32 +202,94 @@ complaintSchema.methods.addAction = function(actionData) {
   return this.save();
 };
 
-complaintSchema.methods.addConfirmation = function(citizenId) {
-  if (!this.confirmations.includes(citizenId)) {
-    this.confirmations.push(citizenId);
-    
-    // Add action log
-    this.actions.push({
-      actorType: 'citizen',
-      action: 'confirmed_resolution',
-      timestamp: new Date(),
-      comment: `Citizen confirmed resolution (${this.confirmations.length} confirmations)`
+complaintSchema.methods.addConfirmation = async function(citizenId) {
+  // Check if citizen already confirmed
+  const existingConfirmation = this.confirmations.find(
+    conf => conf.citizen_id === citizenId
+  );
+  
+  if (existingConfirmation) {
+    throw new Error('Citizen has already confirmed this resolution');
+  }
+  
+  // Add confirmation
+  this.confirmations.push({ citizen_id: citizenId });
+  
+  // Log action
+  this.actions.push({
+    type: 'citizen_confirmation',
+    performed_by: citizenId,
+    details: {
+      confirmation_count: this.confirmations.length
+    }
+  });
+  
+  return this.save();
+};
+
+complaintSchema.methods.addCitizenVote = async function(citizenId, vote) {
+  // Check if citizen already voted
+  const existingVote = this.citizen_votes.find(
+    v => v.citizen_id === citizenId
+  );
+  
+  if (existingVote) {
+    throw new Error('Citizen has already voted on this complaint');
+  }
+  
+  // Add vote
+  this.citizen_votes.push({ 
+    citizen_id: citizenId, 
+    vote: vote 
+  });
+  
+  // Log action
+  this.actions.push({
+    type: 'citizen_vote',
+    performed_by: citizenId,
+    details: {
+      vote: vote,
+      total_yes_votes: this.citizen_votes.filter(v => v.vote === 'yes').length,
+      total_refile_votes: this.citizen_votes.filter(v => v.vote === 'refile').length
+    }
+  });
+  
+  // Handle refile vote
+  if (vote === 'refile') {
+    this.status = 'unresolved';
+    this.resolved_at = null;
+    this.refiles.push({
+      refiled_by: citizenId,
+      reason: 'Citizen voted to refile - issue not actually resolved'
     });
     
-    // Auto-resolve if 3+ confirmations
-    if (this.confirmations.length >= 3) {
-      this.status = 'resolved';
-      this.resolved_at = new Date();
-      this.upvotes = []; // Reset upvotes as requested
-      
-      this.actions.push({
-        actorType: 'system',
-        action: 'auto_resolved',
-        timestamp: new Date(),
-        comment: 'Automatically resolved after 3+ citizen confirmations'
-      });
-    }
+    this.actions.push({
+      type: 'refiled',
+      performed_by: citizenId,
+      details: {
+        reason: 'Citizen refile vote',
+        previous_status: 'awaiting_citizen_confirmation'
+      }
+    });
   }
+  
+  // Check for 3 "yes" votes to actually resolve
+  const yesVotes = this.citizen_votes.filter(v => v.vote === 'yes').length;
+  if (yesVotes >= 3 && this.status === 'awaiting_citizen_confirmation') {
+    this.status = 'resolved';
+    this.resolved_at = new Date();
+    this.upvotes = []; // Reset upvotes as per requirement
+    
+    this.actions.push({
+      type: 'citizen_confirmed_resolved',
+      performed_by: 'system',
+      details: {
+        reason: 'Three or more citizens confirmed resolution',
+        yes_votes: yesVotes
+      }
+    });
+  }
+  
   return this.save();
 };
 
@@ -243,31 +346,39 @@ complaintSchema.statics.generateComplaintId = function() {
   return `COMP-${timestamp}-${random}`.toUpperCase();
 };
 
-// Static method to auto-resolve old awaiting_confirmation complaints
-complaintSchema.statics.autoResolveOldComplaints = function() {
-  const sevenDaysAgo = new Date();
-  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+// Static method to auto-resolve old complaints
+complaintSchema.statics.autoResolveOldComplaints = async function() {
+  const oneWeekAgo = new Date();
+  oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
   
-  return this.updateMany(
-    {
-      status: 'awaiting_confirmation',
-      updated_at: { $lt: sevenDaysAgo }
-    },
-    {
-      $set: {
-        status: 'resolved',
-        resolved_at: new Date()
-      },
-      $push: {
-        actions: {
-          actorType: 'system',
-          action: 'auto_resolved',
-          timestamp: new Date(),
-          comment: 'Automatically resolved after 7 days in awaiting_confirmation status'
-        }
+  // Auto-resolve complaints awaiting citizen confirmation for over a week
+  const oldComplaints = await this.find({
+    status: 'awaiting_citizen_confirmation',
+    created_at: { $lte: oneWeekAgo }
+  });
+  
+  const results = [];
+  
+  for (const complaint of oldComplaints) {
+    complaint.status = 'resolved';
+    complaint.resolved_at = new Date();
+    complaint.upvotes = []; // Reset upvotes
+    
+    complaint.actions.push({
+      type: 'auto_resolved',
+      performed_by: 'system',
+      details: {
+        reason: 'Auto-resolved after 7 days without sufficient citizen confirmations',
+        age_days: Math.floor((new Date() - complaint.created_at) / (1000 * 60 * 60 * 24)),
+        yes_votes: complaint.citizen_votes.filter(v => v.vote === 'yes').length
       }
-    }
-  );
+    });
+    
+    await complaint.save();
+    results.push(complaint.complaint_id);
+  }
+  
+  return results;
 };
 
 module.exports = mongoose.model('Complaint', complaintSchema);

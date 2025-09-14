@@ -623,6 +623,88 @@ router.post('/:id/confirm-resolution', requireCitizen, async (req, res) => {
   }
 });
 
+// Citizen voting endpoint - citizens vote "yes" or "refile" on resolved complaints
+router.post('/:id/citizen-vote', requireCitizen, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { vote } = req.body;
+    const citizen_id = req.user.userId;
+
+    if (!vote || !['yes', 'refile'].includes(vote)) {
+      return res.status(400).json({ error: 'Vote must be either "yes" or "refile"' });
+    }
+
+    const complaint = await Complaint.findOne({ complaint_id: id });
+    if (!complaint) {
+      return res.status(404).json({ error: 'Complaint not found' });
+    }
+
+    if (complaint.status !== 'awaiting_citizen_confirmation') {
+      return res.status(400).json({ 
+        error: 'Complaint is not awaiting citizen confirmation',
+        current_status: complaint.status 
+      });
+    }
+
+    await complaint.addCitizenVote(citizen_id, vote);
+
+    const yesVotes = complaint.citizen_votes.filter(v => v.vote === 'yes').length;
+    const refileVotes = complaint.citizen_votes.filter(v => v.vote === 'refile').length;
+
+    res.json({
+      complaint_id: id,
+      vote_recorded: vote,
+      yes_votes: yesVotes,
+      refile_votes: refileVotes,
+      status: complaint.status,
+      resolved: complaint.status === 'resolved',
+      message: complaint.status === 'resolved' 
+        ? 'Complaint confirmed as resolved by citizens' 
+        : vote === 'refile' 
+          ? 'Complaint refiled - marked as unresolved'
+          : 'Vote recorded - waiting for more citizen confirmations'
+    });
+
+  } catch (error) {
+    console.error('Error recording citizen vote:', error);
+    if (error.message.includes('already voted')) {
+      return res.status(400).json({ error: error.message });
+    }
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Legacy confirm resolution endpoint (kept for backward compatibility)
+router.post('/:id/confirm-resolution', requireCitizen, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const citizen_id = req.user.userId;
+
+    const complaint = await Complaint.findOne({ complaint_id: id });
+    if (!complaint) {
+      return res.status(404).json({ error: 'Complaint not found' });
+    }
+
+    if (complaint.confirmations.includes(citizen_id)) {
+      return res.status(400).json({ error: 'You have already confirmed this resolution' });
+    }
+
+    await complaint.addConfirmation(citizen_id);
+
+    res.json({
+      complaint_id: id,
+      confirmations: complaint.confirmations.length,
+      status: complaint.status,
+      resolved: complaint.status === 'resolved',
+      message: 'Legacy confirmation recorded - please use /citizen-vote endpoint for new voting system'
+    });
+
+  } catch (error) {
+    console.error('Error confirming resolution:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Manual trigger for auto-resolution (for testing purposes)
 router.post('/trigger-auto-resolution', async (req, res) => {
   try {
