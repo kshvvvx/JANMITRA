@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: janmitra-backend
+    env: node
+    buildCommand: cd backend && npm ci
+    startCommand: cd backend && npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+      - key: JWT_SECRET
+        generateValue: true
+      - key: MONGODB_URI
+        fromDatabase:
+          name: janmitra-mongodb
+          property: connectionString
+
+  - type: web
+    name: janmitra-ai-services
+    env: python
+    buildCommand: cd ai-services && pip install -r requirements.txt
+    startCommand: cd ai-services && python app.py
+    healthCheckPath: /health
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: FLASK_APP
+        value: app.py
+
+databases:
+  - name: janmitra-mongodb
+    databaseName: janmitra
+    user: janmitra

@@ -8,9 +8,9 @@ class Database {
 
   async connect() {
     try {
-      const mongoUrl = process.env.MONGODB_URI || 'mongodb://localhost:27017/janmitra';
+      const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/janmitra';
       
-      await mongoose.connect(mongoUrl, {
+      await mongoose.connect(MONGODB_URI, {
         useNewUrlParser: true,
         useUnifiedTopology: true,
       });

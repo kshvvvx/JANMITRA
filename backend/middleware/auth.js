@@ -1,7 +1,7 @@
 const jwt = require('jsonwebtoken');
 const { Citizen, Staff, Supervisor } = require('../models');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'janmitra-secret-key-2024';
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-here';
 
 // Generate JWT token
 const generateToken = (user, role) => {

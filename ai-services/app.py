@@ -143,4 +143,4 @@ if __name__ == '__main__':
     print("  POST /danger-score - Calculate danger score")
     print("  POST /analyze - Complete complaint analysis")
     
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    app.run(debug=False, host='0.0.0.0', port=5001)

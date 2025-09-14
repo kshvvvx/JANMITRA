@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { API_BASE_URL } from './config';
 
 export interface UserInfo {
   id: string;
@@ -77,8 +78,7 @@ export const authenticatedFetch = async (
   });
 };
 
-// API base URL
-export const API_BASE_URL = 'http://localhost:5000/api';
+// API base URL is imported from config
 
 // API endpoints
 export const API_ENDPOINTS = {

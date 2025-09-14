@@ -24,7 +24,12 @@ app.get('/', (req, res) => {
   res.send('JANMITRA backend is up');
 });
 
-// Health check endpoint
+// Health check endpoint for Docker
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: Date.now() });
+});
+
+// API health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: Date.now() });
 });

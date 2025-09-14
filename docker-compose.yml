@@ -21,9 +21,8 @@ services:
   # Backend API
   backend:
     build:
-      context: .
+      context: ./backend
       dockerfile: Dockerfile
-      target: backend
     container_name: janmitra-backend
     restart: unless-stopped
     ports:
@@ -32,26 +31,28 @@ services:
       - NODE_ENV=production
       - PORT=5000
       - MONGODB_URI=mongodb://admin:password123@mongodb:27017/janmitra?authSource=admin
-      - STAFF_JWT_SECRET=your-super-secure-jwt-secret-here
+      - JWT_SECRET=${JWT_SECRET:-your-super-secure-jwt-secret-here}
       - AI_SERVICE_URL=http://ai-services:5001
     depends_on:
       - mongodb
       - ai-services
+    volumes:
+      - backend_uploads:/app/uploads
     networks:
       - janmitra-network
 
   # AI Services
   ai-services:
     build:
-      context: .
+      context: ./ai-services
       dockerfile: Dockerfile
-      target: ai-services
     container_name: janmitra-ai
     restart: unless-stopped
     ports:
       - "5001:5001"
     environment:
       - FLASK_ENV=production
+      - FLASK_APP=app.py
     networks:
       - janmitra-network
 
@@ -74,6 +75,7 @@ services:
 
 volumes:
   mongodb_data:
+  backend_uploads:
 
 networks:
   janmitra-network:
