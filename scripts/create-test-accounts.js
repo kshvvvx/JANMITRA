@@ -30,19 +30,10 @@ async function createTestAccounts() {
         password: await hashPassword('password123'),
         name: 'Rajesh Kumar',
         email: 'rajesh.kumar@janmitra.gov.in',
-        department: 'Public Works',
-        role: 'Field Officer',
+        department: 'roads',
+        role: 'staff',
         phone: '9876543210',
-        assigned_area: {
-          type: 'Polygon',
-          coordinates: [[
-            [77.5946, 12.9716], // Bangalore coordinates
-            [77.6046, 12.9716],
-            [77.6046, 12.9816],
-            [77.5946, 12.9816],
-            [77.5946, 12.9716]
-          ]]
-        },
+        assigned_area: 'Bangalore Urban North',
         active: true
       },
       {
@@ -50,19 +41,10 @@ async function createTestAccounts() {
         password: await hashPassword('password123'),
         name: 'Priya Sharma',
         email: 'priya.sharma@janmitra.gov.in',
-        department: 'Sanitation',
-        role: 'Inspector',
+        department: 'sanitation',
+        role: 'staff',
         phone: '9876543211',
-        assigned_area: {
-          type: 'Polygon',
-          coordinates: [[
-            [77.6046, 12.9716],
-            [77.6146, 12.9716],
-            [77.6146, 12.9816],
-            [77.6046, 12.9816],
-            [77.6046, 12.9716]
-          ]]
-        },
+        assigned_area: 'Bangalore Urban South',
         active: true
       },
       {
@@ -70,19 +52,10 @@ async function createTestAccounts() {
         password: await hashPassword('password123'),
         name: 'Amit Patel',
         email: 'amit.patel@janmitra.gov.in',
-        department: 'Traffic Management',
-        role: 'Traffic Officer',
+        department: 'general',
+        role: 'staff',
         phone: '9876543212',
-        assigned_area: {
-          type: 'Polygon',
-          coordinates: [[
-            [77.5846, 12.9616],
-            [77.5946, 12.9616],
-            [77.5946, 12.9716],
-            [77.5846, 12.9716],
-            [77.5846, 12.9616]
-          ]]
-        },
+        assigned_area: 'Bangalore Urban Central',
         active: true
       }
     ];
