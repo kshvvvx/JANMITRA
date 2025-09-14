@@ -3,6 +3,8 @@ import { View, StyleSheet, ScrollView, Alert, ActivityIndicator } from 'react-na
 import { Text, Card, List, Switch, Button, Divider } from 'react-native-paper';
 import { router } from 'expo-router';
 import { getUserInfo, clearAuth, UserInfo } from '../../utils/auth';
+import { ThemedView } from '@/components/themed-view';
+import { ThemedText } from '@/components/themed-text';
 
 export default function ProfileScreen() {
   const [user, setUser] = useState<UserInfo | null>(null);
@@ -17,22 +19,41 @@ export default function ProfileScreen() {
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Logout', style: 'destructive', onPress: async () => {
-          await logout();
-          router.replace('/language-selection');
+          await clearAuth();
+          router.replace('/auth/citizen-login');
         }}
       ]
     );
   };
 
   const handleStaffLogin = () => {
-    // TODO: Navigate to staff login screen
-    // For now, we'll show an alert with instructions
-    Alert.alert(
-      'Staff Login',
-      'Staff login screen is available at /staff-login route. In a full implementation, this would navigate to the staff login screen.',
-      [{ text: 'OK' }]
-    );
+    router.push('/auth/staff-login');
   };
+
+  useEffect(() => {
+    const loadUserInfo = async () => {
+      try {
+        const userInfo = await getUserInfo();
+        setUser(userInfo);
+      } catch (error) {
+        console.error('Error loading user info:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadUserInfo();
+  }, []);
+
+  if (loading) {
+    return (
+      <ThemedView style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#2196f3" />
+        </View>
+      </ThemedView>
+    );
+  }
 
   return (
     <ThemedView style={styles.container}>
@@ -46,7 +67,7 @@ export default function ProfileScreen() {
             {user?.name || 'Citizen User'}
           </ThemedText>
           <ThemedText type="default" style={styles.userEmail}>
-            {user?.phoneNumber || 'user@janmitra.com'}
+            {user?.phone || user?.email || 'user@janmitra.com'}
           </ThemedText>
         </View>
 
@@ -260,5 +281,10 @@ const styles = StyleSheet.create({
   },
   versionText: {
     color: '#999',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });

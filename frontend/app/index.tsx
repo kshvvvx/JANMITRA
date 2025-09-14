@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { router } from 'expo-router';
-import { isAuthenticated } from './utils/auth';
+import { isAuthenticated } from '../utils/auth';
 
 const IndexScreen = () => {
   const [checking, setChecking] = useState(true);

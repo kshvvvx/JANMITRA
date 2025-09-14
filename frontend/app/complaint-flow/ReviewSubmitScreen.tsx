@@ -29,31 +29,64 @@ export default function ReviewSubmitScreen() {
     setIsSubmitting(true);
 
     try {
-      // Prepare submission data for backend API (citizen_id will be extracted from JWT token)
-      const submissionData = {
+      // Import auth utilities
+      const { getAuthToken, API_ENDPOINTS } = await import('../../utils/auth');
+
+      // Create FormData for multipart/form-data submission
+      const formData = new FormData();
+      
+      // Add complaint data as JSON string
+      const complaintInfo = {
         description: complaintData?.description || 'Voice complaint recorded',
         location: {
           lat: locationData?.lat || null,
           lng: locationData?.lng || null,
           address: locationData?.address || 'Location not specified'
-        },
-        media: mediaData.length > 0 
-          ? mediaData.map((item: any) => ({
-              type: item.type || 'image',
-              url: item.uri || 'dummy-url-placeholder' // TODO: Replace with actual media upload URL
-            }))
-          : []
+        }
       };
+      
+      formData.append('complaint', JSON.stringify(complaintInfo));
 
-      console.log('Submitting complaint data:', submissionData);
+      // Add media files if any
+      if (mediaData.length > 0) {
+        for (let i = 0; i < mediaData.length; i++) {
+          const mediaItem = mediaData[i];
+          
+          // Create file object from URI
+          const response = await fetch(mediaItem.uri);
+          const blob = await response.blob();
+          
+          // Determine file extension based on type
+          let extension = 'jpg';
+          if (mediaItem.type === 'video') {
+            extension = 'mp4';
+          } else if (mediaItem.type === 'audio') {
+            extension = 'm4a';
+          }
+          
+          const fileName = mediaItem.name || `media_${Date.now()}_${i}.${extension}`;
+          
+          // Append file to FormData
+          formData.append('media', blob, fileName);
+        }
+      }
 
-      // Import auth utilities
-      const { authenticatedFetch, API_ENDPOINTS } = await import('../../utils/auth');
+      console.log('Submitting complaint with media files...');
 
-      // Make authenticated API call to backend
-      const response = await authenticatedFetch(API_ENDPOINTS.COMPLAINTS, {
+      // Get JWT token
+      const token = await getAuthToken();
+      if (!token) {
+        throw new Error('Authentication required. Please log in again.');
+      }
+
+      // Make authenticated API call with FormData
+      const response = await fetch(API_ENDPOINTS.COMPLAINTS, {
         method: 'POST',
-        body: JSON.stringify(submissionData),
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          // Don't set Content-Type header - let browser set it with boundary for FormData
+        },
+        body: formData,
       });
 
       if (!response.ok) {

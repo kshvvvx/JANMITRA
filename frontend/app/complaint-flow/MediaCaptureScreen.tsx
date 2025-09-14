@@ -1,97 +1,166 @@
 import React, { useState } from 'react';
-import { View, StyleSheet, Alert, Image } from 'react-native';
+import { View, StyleSheet, Alert, Image, ScrollView } from 'react-native';
 import { Text, Button, Card, IconButton } from 'react-native-paper';
-// import * as ImagePicker from 'expo-image-picker';
+import * as ImagePicker from 'expo-image-picker';
+import { Audio } from 'expo-av';
 import { ThemedView } from '@/components/themed-view';
 import { ThemedText } from '@/components/themed-text';
 import { useRouter } from 'expo-router';
 
 interface MediaItem {
   uri: string;
-  type: 'image' | 'video';
+  type: 'image' | 'video' | 'audio';
+  name?: string;
+  size?: number;
 }
 
 export default function MediaCaptureScreen() {
   const [media, setMedia] = useState<MediaItem[]>([]);
+  const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
   const router = useRouter();
 
   const requestPermissions = async () => {
-    // Media permissions disabled until expo-image-picker is installed
-    Alert.alert('Feature Unavailable', 'Media capture requires expo-image-picker package. Please install dependencies first.');
-    return false;
+    try {
+      const { status: cameraStatus } = await ImagePicker.requestCameraPermissionsAsync();
+      const { status: mediaLibraryStatus } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      const { status: audioStatus } = await Audio.requestPermissionsAsync();
+      
+      if (cameraStatus !== 'granted' || mediaLibraryStatus !== 'granted' || audioStatus !== 'granted') {
+        Alert.alert('Permissions Required', 'Please grant camera, media library, and microphone permissions to capture media.');
+        return false;
+      }
+      return true;
+    } catch (error) {
+      console.error('Permission error:', error);
+      return false;
+    }
   };
 
   const capturePhoto = async () => {
     const hasPermission = await requestPermissions();
     if (!hasPermission) return;
 
-    // Camera functionality disabled until expo-image-picker is installed
-    Alert.alert('Feature Unavailable', 'Camera capture requires expo-image-picker package.');
-    return;
+    try {
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.8,
+      });
 
-    // const result = await ImagePicker.launchCameraAsync({
-    //   mediaTypes: ImagePicker.MediaTypeOptions.Images,
-    //   allowsEditing: true,
-    //   aspect: [4, 3],
-    //   quality: 0.8,
-    // });
-
-    // if (!result.canceled && result.assets[0]) {
-    //   const newMedia: MediaItem = {
-    //     uri: result.assets[0].uri,
-    //     type: 'image'
-    //   };
-    //   setMedia(prev => [...prev, newMedia]);
-    // }
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        const newMedia: MediaItem = {
+          uri: asset.uri,
+          type: 'image',
+          name: asset.fileName || `photo_${Date.now()}.jpg`,
+          size: asset.fileSize
+        };
+        setMedia(prev => [...prev, newMedia]);
+      }
+    } catch (error) {
+      console.error('Camera error:', error);
+      Alert.alert('Error', 'Failed to capture photo');
+    }
   };
 
   const captureVideo = async () => {
     const hasPermission = await requestPermissions();
     if (!hasPermission) return;
 
-    // Video capture functionality disabled until expo-image-picker is installed
-    Alert.alert('Feature Unavailable', 'Video capture requires expo-image-picker package.');
-    return;
+    try {
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+        allowsEditing: true,
+        quality: 0.8,
+        videoMaxDuration: 30, // 30 seconds max
+      });
 
-    // const result = await ImagePicker.launchCameraAsync({
-    //   mediaTypes: ImagePicker.MediaTypeOptions.Videos,
-    //   allowsEditing: true,
-    //   videoMaxDuration: 30,
-    //   quality: ImagePicker.UIImagePickerControllerQualityType.Medium,
-    // });
-
-    // if (!result.canceled && result.assets[0]) {
-    //   const newMedia: MediaItem = {
-    //     uri: result.assets[0].uri,
-    //     type: 'video'
-    //   };
-    //   setMedia(prev => [...prev, newMedia]);
-    // }
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        const newMedia: MediaItem = {
+          uri: asset.uri,
+          type: 'video',
+          name: asset.fileName || `video_${Date.now()}.mp4`,
+          size: asset.fileSize
+        };
+        setMedia(prev => [...prev, newMedia]);
+      }
+    } catch (error) {
+      console.error('Video capture error:', error);
+      Alert.alert('Error', 'Failed to capture video');
+    }
   };
 
-  const pickFromGallery = async () => {
+  const recordAudio = async () => {
     const hasPermission = await requestPermissions();
     if (!hasPermission) return;
 
-    // Gallery functionality disabled until expo-image-picker is installed
-    Alert.alert('Feature Unavailable', 'Gallery selection requires expo-image-picker package.');
-    return;
+    try {
+      if (isRecording) {
+        // Stop recording
+        if (recording) {
+          await recording.stopAndUnloadAsync();
+          const uri = recording.getURI();
+          if (uri) {
+            const newMedia: MediaItem = {
+              uri,
+              type: 'audio',
+              name: `audio_${Date.now()}.m4a`,
+            };
+            setMedia(prev => [...prev, newMedia]);
+          }
+          setRecording(null);
+          setIsRecording(false);
+        }
+      } else {
+        // Start recording
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: true,
+          playsInSilentModeIOS: true,
+        });
+        
+        const { recording: newRecording } = await Audio.Recording.createAsync(
+          Audio.RecordingOptionsPresets.HIGH_QUALITY
+        );
+        setRecording(newRecording);
+        setIsRecording(true);
+      }
+    } catch (error) {
+      console.error('Audio recording error:', error);
+      Alert.alert('Error', 'Failed to record audio');
+      setIsRecording(false);
+      setRecording(null);
+    }
+  };
 
-    // const result = await ImagePicker.launchImageLibraryAsync({
-    //   mediaTypes: ImagePicker.MediaTypeOptions.All,
-    //   allowsEditing: true,
-    //   aspect: [4, 3],
-    //   quality: 0.8,
-    //   allowsMultipleSelection: true,
-    // });
+  const selectFromGallery = async () => {
+    const hasPermission = await requestPermissions();
+    if (!hasPermission) return;
 
-    // if (!result.canceled) {
-    //   const newMediaItems: MediaItem[] = result.assets.map((asset: any) => ({
-    //     uri: asset.uri,
-    //     type: asset.type === 'video' ? 'video' : 'image'
-    //   }));
-    //   setMedia(prev => [...prev, ...newMediaItems]);
-    // }
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.All,
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.8,
+        allowsMultipleSelection: true,
+      });
+
+      if (!result.canceled && result.assets) {
+        const newMediaItems: MediaItem[] = result.assets.map(asset => ({
+          uri: asset.uri,
+          type: asset.type === 'video' ? 'video' : 'image',
+          name: asset.fileName || `media_${Date.now()}.${asset.type === 'video' ? 'mp4' : 'jpg'}`,
+          size: asset.fileSize
+        }));
+        setMedia(prev => [...prev, ...newMediaItems]);
+      }
+    } catch (error) {
+      console.error('Gallery selection error:', error);
+      Alert.alert('Error', 'Failed to select from gallery');
+    }
   };
 
   const removeMedia = (index: number) => {
@@ -154,6 +223,14 @@ export default function MediaCaptureScreen() {
             </Button>
             <Button
               mode="outlined"
+              onPress={recordAudio}
+              icon={isRecording ? "stop" : "microphone"}
+              style={[styles.actionButton, isRecording && styles.recordingButton]}
+            >
+              {isRecording ? "Stop Recording" : "Record Audio"}
+            </Button>
+            <Button
+              mode="outlined"
               onPress={captureVideo}
               icon="video"
               style={styles.actionButton}
@@ -162,7 +239,7 @@ export default function MediaCaptureScreen() {
             </Button>
             <Button
               mode="outlined"
-              onPress={pickFromGallery}
+              onPress={selectFromGallery}
               icon="image"
               style={styles.actionButton}
             >
@@ -190,7 +267,7 @@ export default function MediaCaptureScreen() {
                     style={styles.removeButton}
                   />
                   <Text style={styles.mediaType}>
-                    {item.type === 'video' ? '🎥' : '📷'}
+                    {item.type === 'video' ? '🎥' : item.type === 'audio' ? '🎵' : '📷'}
                   </Text>
                 </View>
               ))}
@@ -265,6 +342,11 @@ const styles = StyleSheet.create({
   },
   actionButton: {
     flex: 1,
+    marginHorizontal: 4,
+  },
+  recordingButton: {
+    backgroundColor: '#ffebee',
+    borderColor: '#f44336',
   },
   mediaGrid: {
     flexDirection: 'row',

@@ -6,11 +6,15 @@ const router = express.Router();
 const { Complaint, Citizen } = require('../models');
 const { calculateDistance } = require('../utils/geo');
 const { authenticateToken, requireCitizen, requireStaff, requireSupervisor, requireStaffOrSupervisor } = require('../middleware/auth');
+const { uploadMultiple, handleUploadError, processUploadedFiles } = require('../middleware/upload');
 
 // Create a new complaint (citizens only)
-router.post('/', requireCitizen, async (req, res) => {
+router.post('/', requireCitizen, uploadMultiple, handleUploadError, async (req, res) => {
   try {
-    const { description, category, location, media } = req.body;
+    // Parse JSON fields from multipart form data
+    const description = req.body.description;
+    const category = req.body.category;
+    const location = req.body.location ? JSON.parse(req.body.location) : null;
     
     // Use authenticated citizen's ID
     const citizen_id = req.user.userId;
@@ -21,6 +25,9 @@ router.post('/', requireCitizen, async (req, res) => {
         error: 'Missing required fields: description and location are required'
       });
     }
+
+    // Process uploaded media files
+    const mediaFiles = processUploadedFiles(req, req.files || []);
 
     // Generate complaint ID
     const complaint_id = Complaint.generateComplaintId();
@@ -67,7 +74,7 @@ router.post('/', requireCitizen, async (req, res) => {
       citizen_id,
       description,
       location,
-      media: media || [],
+      media: mediaFiles,
       status: 'unresolved',
       upvotes: [],
       refiles: [],
