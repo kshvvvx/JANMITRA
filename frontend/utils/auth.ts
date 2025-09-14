@@ -93,6 +93,8 @@ export const API_ENDPOINTS = {
   // Complaint endpoints
   COMPLAINTS: `${API_BASE_URL}/complaints`,
   COMPLAINT_BY_ID: (id: string) => `${API_BASE_URL}/complaints/${id}`,
+  NEARBY_COMPLAINTS: (lat: number, lng: number, radius?: number) => 
+    `${API_BASE_URL}/complaints/nearby/${lat}/${lng}${radius ? `?radius=${radius}` : ''}`,
   UPVOTE_COMPLAINT: (id: string) => `${API_BASE_URL}/complaints/${id}/upvote`,
   UPDATE_COMPLAINT_STATUS: (id: string) => `${API_BASE_URL}/complaints/${id}/status`,
   REFILE_COMPLAINT: (id: string) => `${API_BASE_URL}/complaints/${id}/refile`,

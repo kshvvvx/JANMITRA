@@ -19,11 +19,34 @@ router.post('/', requireCitizen, uploadMultiple, handleUploadError, async (req, 
     // Use authenticated citizen's ID
     const citizen_id = req.user.userId;
 
-    // Basic validation
+    // Enhanced location validation
     if (!description || !location) {
       return res.status(400).json({
         error: 'Missing required fields: description and location are required'
       });
+    }
+
+    // Validate location has required fields
+    if (!location.address) {
+      return res.status(400).json({
+        error: 'Location must include an address'
+      });
+    }
+
+    // For GPS locations, validate coordinates
+    if (location.lat !== null && location.lng !== null) {
+      if (typeof location.lat !== 'number' || typeof location.lng !== 'number') {
+        return res.status(400).json({
+          error: 'Invalid GPS coordinates: lat and lng must be numbers'
+        });
+      }
+      
+      // Validate coordinate ranges
+      if (location.lat < -90 || location.lat > 90 || location.lng < -180 || location.lng > 180) {
+        return res.status(400).json({
+          error: 'Invalid GPS coordinates: lat must be between -90 and 90, lng must be between -180 and 180'
+        });
+      }
     }
 
     // Process uploaded media files
@@ -208,6 +231,77 @@ router.get('/', authenticateToken, async (req, res) => {
 
   } catch (error) {
     console.error('Error fetching complaints:', error);
+    res.status(500).json({
+      error: 'Internal server error'
+    });
+  }
+});
+
+// Get nearby complaints sorted by distance
+router.get('/nearby/:lat/:lng', authenticateToken, async (req, res) => {
+  try {
+    const { lat, lng } = req.params;
+    const { radius = 10 } = req.query; // Default 10km radius
+    
+    const searchLat = parseFloat(lat);
+    const searchLng = parseFloat(lng);
+    
+    // Validate coordinates
+    if (isNaN(searchLat) || isNaN(searchLng)) {
+      return res.status(400).json({
+        error: 'Invalid coordinates. Latitude and longitude must be valid numbers.'
+      });
+    }
+    
+    if (searchLat < -90 || searchLat > 90 || searchLng < -180 || searchLng > 180) {
+      return res.status(400).json({
+        error: 'Invalid GPS coordinates: lat must be between -90 and 90, lng must be between -180 and 180'
+      });
+    }
+
+    // Fetch all complaints with GPS coordinates
+    const complaints = await Complaint.find({
+      'location.lat': { $exists: true, $ne: null },
+      'location.lng': { $exists: true, $ne: null }
+    })
+    .select('complaint_id description status location upvotes created_at')
+    .lean();
+
+    // Calculate distance for each complaint and filter by radius
+    const nearbyComplaints = complaints
+      .map(complaint => {
+        const distance = calculateDistance(
+          searchLat, 
+          searchLng, 
+          complaint.location.lat, 
+          complaint.location.lng
+        );
+        
+        return {
+          id: complaint.complaint_id,
+          description: complaint.description,
+          status: complaint.status,
+          location: complaint.location,
+          upvotes: complaint.upvotes ? complaint.upvotes.length : 0,
+          created_at: complaint.created_at,
+          distance: Math.round(distance * 100) / 100 // Round to 2 decimal places
+        };
+      })
+      .filter(complaint => complaint.distance <= parseFloat(radius))
+      .sort((a, b) => a.distance - b.distance); // Sort by distance ascending
+
+    res.json({
+      search_location: {
+        lat: searchLat,
+        lng: searchLng,
+        radius: parseFloat(radius)
+      },
+      count: nearbyComplaints.length,
+      complaints: nearbyComplaints
+    });
+
+  } catch (error) {
+    console.error('Error fetching nearby complaints:', error);
     res.status(500).json({
       error: 'Internal server error'
     });
