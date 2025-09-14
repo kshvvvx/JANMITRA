@@ -29,38 +29,27 @@ export default function ReviewSubmitScreen() {
     setIsSubmitting(true);
 
     try {
-      // TODO: Replace with actual backend integration when ready
-      // Mock API call for now to avoid connection errors
+      // Prepare submission data for backend API
       const submissionData = {
-        citizen_id: 'test-user',
+        citizen_id: 'demo-user',
         description: complaintData?.description || 'Voice complaint recorded',
         location: {
-          lat: locationData?.lat,
-          lng: locationData?.lng,
-          address: locationData?.address
+          lat: locationData?.lat || null,
+          lng: locationData?.lng || null,
+          address: locationData?.address || 'Location not specified'
         },
-        media: mediaData.map((item: any) => item.uri) // Convert to URI array for backend
+        media: mediaData.length > 0 
+          ? mediaData.map((item: any) => ({
+              type: item.type || 'image',
+              url: item.uri || 'dummy-url-placeholder' // TODO: Replace with actual media upload URL
+            }))
+          : []
       };
 
-      // Simulate API delay
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      console.log('Submitting complaint data:', submissionData);
 
-      // Generate mock complaint ID
-      const mockComplaintId = `compl-${Math.floor(Math.random() * 9000) + 1000}`;
-      
-      console.log('Mock submission data:', submissionData);
-      console.log('Generated complaint ID:', mockComplaintId);
-      
-      // Navigate to success screen with mock ID
-      router.replace({
-        pathname: '/complaint-flow/ConfirmationScreen',
-        params: { 
-          complaintId: mockComplaintId,
-          step: '5'
-        }
-      });
-
-      /* TODO: Uncomment when backend is ready
+      // TODO: For physical devices, replace localhost with ngrok URL (e.g., https://abc123.ngrok.io)
+      // For Expo web, localhost:5000 should work fine
       const response = await fetch('http://localhost:5000/api/complaints', {
         method: 'POST',
         headers: {
@@ -70,21 +59,44 @@ export default function ReviewSubmitScreen() {
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to submit complaint');
+        let errorMessage = 'Failed to submit complaint';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorData.message || errorMessage;
+        } catch {
+          // If error response is not JSON, use status text
+          errorMessage = `Server error: ${response.status} ${response.statusText}`;
+        }
+        throw new Error(errorMessage);
       }
 
       const result = await response.json();
+      console.log('Complaint submitted successfully:', result);
       
+      // Navigate to success screen with real complaint ID
       router.replace({
         pathname: '/complaint-flow/ConfirmationScreen',
-        params: { complaintId: result.complaint_id }
+        params: { 
+          complaintId: result.complaint_id,
+          step: '5'
+        }
       });
-      */
 
     } catch (error: any) {
       console.error('Error submitting complaint:', error);
-      Alert.alert('Error', error.message || 'Failed to submit complaint. Please try again.');
+      
+      // Provide user-friendly error messages
+      let userMessage = 'Failed to submit complaint. Please try again.';
+      
+      if (error.message.includes('Network request failed') || error.message.includes('fetch')) {
+        userMessage = 'Network error. Please check your internet connection and try again.';
+      } else if (error.message.includes('Server error: 5')) {
+        userMessage = 'Server is currently unavailable. Please try again later.';
+      } else if (error.message) {
+        userMessage = error.message;
+      }
+      
+      Alert.alert('Submission Failed', userMessage);
     } finally {
       setIsSubmitting(false);
     }
