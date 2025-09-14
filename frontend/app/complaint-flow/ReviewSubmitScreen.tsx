@@ -29,6 +29,8 @@ export default function ReviewSubmitScreen() {
     setIsSubmitting(true);
 
     try {
+      // TODO: Replace with actual backend integration when ready
+      // Mock API call for now to avoid connection errors
       const submissionData = {
         citizen_id: 'test-user',
         description: complaintData?.description || 'Voice complaint recorded',
@@ -40,6 +42,25 @@ export default function ReviewSubmitScreen() {
         media: mediaData.map((item: any) => item.uri) // Convert to URI array for backend
       };
 
+      // Simulate API delay
+      await new Promise(resolve => setTimeout(resolve, 1500));
+
+      // Generate mock complaint ID
+      const mockComplaintId = `compl-${Math.floor(Math.random() * 9000) + 1000}`;
+      
+      console.log('Mock submission data:', submissionData);
+      console.log('Generated complaint ID:', mockComplaintId);
+      
+      // Navigate to success screen with mock ID
+      router.replace({
+        pathname: '/complaint-flow/ConfirmationScreen',
+        params: { 
+          complaintId: mockComplaintId,
+          step: '5'
+        }
+      });
+
+      /* TODO: Uncomment when backend is ready
       const response = await fetch('http://localhost:5000/api/complaints', {
         method: 'POST',
         headers: {
@@ -55,11 +76,11 @@ export default function ReviewSubmitScreen() {
 
       const result = await response.json();
       
-      // Navigate to success screen
       router.replace({
         pathname: '/complaint-flow/ConfirmationScreen',
         params: { complaintId: result.complaint_id }
       });
+      */
 
     } catch (error: any) {
       console.error('Error submitting complaint:', error);

@@ -98,7 +98,8 @@ export default function LocationScreen() {
       pathname: '/complaint-flow/ComplaintInputScreen',
       params: {
         media: params.media,
-        location: JSON.stringify(locationData)
+        location: JSON.stringify(locationData),
+        step: '3'
       }
     });
   };

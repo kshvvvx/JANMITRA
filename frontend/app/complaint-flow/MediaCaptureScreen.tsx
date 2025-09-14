@@ -100,15 +100,29 @@ export default function MediaCaptureScreen() {
 
   const handleNext = () => {
     // Pass media data to next screen
+    const mediaData = media.length > 0 ? media : [];
     router.push({
       pathname: '/complaint-flow/LocationScreen',
-      params: { media: JSON.stringify(media) }
+      params: { 
+        media: JSON.stringify(mediaData),
+        step: '2'
+      }
     });
   };
 
   const handleSkip = () => {
     // Continue without media
-    router.push('/complaint-flow/LocationScreen');
+    router.push({
+      pathname: '/complaint-flow/LocationScreen',
+      params: { 
+        media: JSON.stringify([]),
+        step: '2'
+      }
+    });
+  };
+
+  const handleBack = () => {
+    router.back();
   };
 
   return (
@@ -189,18 +203,27 @@ export default function MediaCaptureScreen() {
       <View style={styles.navigationContainer}>
         <Button
           mode="outlined"
-          onPress={handleSkip}
-          style={styles.skipButton}
+          onPress={handleBack}
+          style={styles.backButton}
         >
-          Skip
+          Back
         </Button>
-        <Button
-          mode="contained"
-          onPress={handleNext}
-          style={styles.nextButton}
-        >
-          Next
-        </Button>
+        <View style={styles.rightButtons}>
+          <Button
+            mode="outlined"
+            onPress={handleSkip}
+            style={styles.skipButton}
+          >
+            Skip
+          </Button>
+          <Button
+            mode="contained"
+            onPress={handleNext}
+            style={styles.nextButton}
+          >
+            Next
+          </Button>
+        </View>
       </View>
     </ThemedView>
   );
@@ -276,12 +299,23 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 12,
     marginTop: 'auto',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  backButton: {
+    minWidth: 80,
+  },
+  rightButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    flex: 1,
+    justifyContent: 'flex-end',
   },
   skipButton: {
-    flex: 1,
+    minWidth: 80,
   },
   nextButton: {
-    flex: 2,
+    minWidth: 80,
     backgroundColor: '#2196f3',
   },
 });

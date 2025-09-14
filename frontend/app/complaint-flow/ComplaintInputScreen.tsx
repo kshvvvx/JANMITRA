@@ -68,7 +68,8 @@ export default function ComplaintInputScreen() {
       params: {
         media: params.media,
         location: params.location,
-        complaint: JSON.stringify(complaintData)
+        complaint: JSON.stringify(complaintData),
+        step: '4'
       }
     });
   };

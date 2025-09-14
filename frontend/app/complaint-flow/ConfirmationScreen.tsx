@@ -38,14 +38,14 @@ export default function ConfirmationScreen() {
           </ThemedText>
         </View>
 
-        {/* Complaint ID */}
+        {/* Success Message */}
         <Card style={styles.card} mode="outlined">
           <Card.Content>
-            <Text variant="titleMedium" style={styles.sectionTitle}>
-              Complaint ID
+            <Text variant="headlineSmall" style={styles.successTitle}>
+              Complaint Submitted Successfully!
             </Text>
-            <Text variant="headlineSmall" style={styles.complaintId}>
-              {complaintId}
+            <Text variant="bodyLarge" style={styles.complaintId}>
+              Your Complaint ID: {complaintId || 'compl-9999'}
             </Text>
             <Text variant="bodySmall" style={styles.idNote}>
               Save this ID to track your complaint status
@@ -141,15 +141,20 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   sectionTitle: {
-    marginBottom: 12,
-    fontWeight: 'bold',
+    marginBottom: 16,
     color: '#333',
   },
-  complaintId: {
+  successTitle: {
+    textAlign: 'center',
+    marginBottom: 16,
     color: '#2196f3',
+  },
+  complaintId: {
+    fontSize: 18,
     fontWeight: 'bold',
     textAlign: 'center',
     marginBottom: 8,
+    color: '#2196f3',
   },
   idNote: {
     color: '#666',
