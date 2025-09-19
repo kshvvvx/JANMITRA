@@ -1,5 +1,6 @@
 // MongoDB configuration for JANMITRA backend using Mongoose
 const mongoose = require('mongoose');
+const logger = require('./logger');
 
 class Database {
   constructor() {
@@ -16,12 +17,12 @@ class Database {
       });
 
       this.isConnected = true;
-      console.log('✅ Connected to MongoDB with Mongoose');
+      logger.info('MongoDB connected successfully');
       
       return mongoose.connection;
     } catch (error) {
-      console.error('❌ MongoDB connection failed:', error.message);
-      console.log('🔄 Falling back to in-memory storage');
+      logger.error(`MongoDB connection failed: ${error.message}`);
+      logger.warn('Falling back to in-memory storage');
       this.isConnected = false;
       return null;
     }
@@ -31,7 +32,7 @@ class Database {
     if (this.isConnected) {
       await mongoose.disconnect();
       this.isConnected = false;
-      console.log('📴 Disconnected from MongoDB');
+      logger.info('Disconnected from MongoDB');
     }
   }
 

@@ -1,11 +1,16 @@
 // Push notification utilities for JANMITRA backend
 // Handles sending push notifications via Expo Push API
 
-const { Expo } = require('expo-server-sdk');
-const PushToken = require('../models/PushToken');
+let expo;
+try {
+  const { Expo } = require('expo-server-sdk');
+  expo = new Expo();
+} catch (error) {
+  console.warn('Expo Server SDK not properly initialized. Push notifications will be disabled.');
+  console.warn('To enable push notifications, make sure expo-server-sdk is properly installed.');
+}
 
-// Create a new Expo SDK client
-const expo = new Expo();
+const PushToken = require('../models/PushToken');
 
 /**
  * Send push notification to specific users
@@ -17,6 +22,11 @@ const expo = new Expo();
  * @param {Object} notification.data - Additional data to send with notification
  */
 async function sendPushNotification(userIds, userType, notification) {
+  if (!expo) {
+    console.warn('Push notifications disabled: Expo Server SDK not initialized');
+    return { success: false, sent: 0, error: 'Push notifications not configured' };
+  }
+
   try {
     if (!Array.isArray(userIds)) {
       userIds = [userIds];

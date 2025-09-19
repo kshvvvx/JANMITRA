@@ -3,13 +3,18 @@ const mongoose = require('mongoose');
 const citizenSchema = new mongoose.Schema({
   citizen_id: {
     type: String,
-    required: true,
+    required: function() { return this.profileComplete; },
     unique: true,
+    sparse: true,
     index: true
   },
   name: {
     type: String,
-    required: true
+    required: function() { return this.profileComplete; }
+  },
+  profileComplete: {
+    type: Boolean,
+    default: false
   },
   email: {
     type: String,
@@ -17,7 +22,8 @@ const citizenSchema = new mongoose.Schema({
     unique: true,
     sparse: true,
     lowercase: true,
-    index: true
+    index: true,
+    default: null
   },
   phone: {
     type: String,
