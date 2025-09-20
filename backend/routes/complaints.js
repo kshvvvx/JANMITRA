@@ -3,13 +3,109 @@
 
 const express = require('express');
 const router = express.Router();
+const axios = require('axios');
 const { Complaint, Citizen } = require('../models');
 const { calculateDistance } = require('../utils/geo');
 const { authenticateToken, requireRole, requireCitizen, requireStaff, requireSupervisor, requireStaffOrSupervisor } = require('../middleware/auth');
 const { notifyComplaintStatusChange, notifyComplaintUpvoted, notifyStaffNewComplaint } = require('../utils/notifications');
 const { uploadMultiple, handleUploadError, processUploadedFiles } = require('../middleware/upload');
+const { v4: uuidv4 } = require('uuid');
 
-// Create a new complaint (citizens only)
+// AI Service Configuration
+const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
+const AI_REQUEST_TIMEOUT = 5000; // 5 seconds
+
+/**
+ * Call AI service to analyze complaint
+ * @param {Object} complaintData - Complaint data to analyze
+ * @returns {Promise<Object>} AI analysis results
+ */
+async function analyzeComplaintWithAI(complaintData) {
+  try {
+    const response = await axios.post(
+      `${AI_SERVICE_URL}/api/ai/analyze`,
+      {
+        description: complaintData.description,
+        category: complaintData.category,
+        location: complaintData.location,
+        media_type: complaintData.media_type,
+        media_count: complaintData.media?.length || 0,
+        language: complaintData.language || 'en'
+      },
+      { 
+        timeout: AI_REQUEST_TIMEOUT,
+        headers: { 'Content-Type': 'application/json' }
+      }
+    );
+    return response.data;
+  } catch (error) {
+    console.error('AI Service Error:', error.message);
+    // Return default values if AI service is unavailable
+    return {
+      danger_score: 5.0,
+      risk_level: 'medium',
+      auto_description: complaintData.description.substring(0, 150) + '...',
+      sentiment: 'neutral',
+      is_duplicate: false,
+      similar_complaints: []
+    };
+  }
+}
+
+/**
+ * Find similar existing complaints
+ * @param {Object} complaintData - New complaint data
+ * @returns {Promise<Array>} List of similar complaints
+ */
+async function findSimilarComplaints(complaintData) {
+  try {
+    // Search for similar complaints in the last 30 days
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    
+    // Basic text similarity search (can be enhanced with vector search)
+    const keywords = complaintData.description
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(word => word.length > 3);
+    
+    const query = {
+      $or: [
+        { description: { $regex: keywords.join('|'), $options: 'i' } },
+        { category: complaintData.category }
+      ],
+      status: { $ne: 'resolved' },
+      createdAt: { $gte: thirtyDaysAgo }
+    };
+
+    if (complaintData.location) {
+      // Add location-based filtering (within 1km radius)
+      const { lat, lng } = complaintData.location;
+      if (lat && lng) {
+        query['location.coordinates'] = {
+          $near: {
+            $geometry: {
+              type: 'Point',
+              coordinates: [lng, lat] // MongoDB uses [longitude, latitude] order
+            },
+            $maxDistance: 1000, // 1km radius
+            $minDistance: 0
+          }
+        };
+      }
+    }
+
+    return await Complaint.find(query)
+      .sort({ upvotes: -1, createdAt: -1 })
+      .limit(5)
+      .lean();
+  } catch (error) {
+    console.error('Error finding similar complaints:', error);
+    return [];
+  }
+}
+
+// Create a new complaint with AI integration (citizens only)
 router.post('/', authenticateToken, requireRole(['citizen']), (req, res, next) => {
   // Skip multer for JSON requests
   if (req.headers['content-type'] === 'application/json') {
@@ -22,9 +118,36 @@ router.post('/', authenticateToken, requireRole(['citizen']), (req, res, next) =
     const description = req.body.description;
     const category = req.body.category;
     const location = typeof req.body.location === 'string' ? JSON.parse(req.body.location) : req.body.location;
+    const language = req.body.language || 'en';
     
     // Use authenticated citizen's ID
     const citizen_id = req.user.userId;
+    
+    // Process media files if any
+    const media = req.files ? await processUploadedFiles(req.files) : [];
+    
+    // Prepare complaint data for AI analysis
+    const complaintData = {
+      description,
+      category,
+      location,
+      media_type: media.length > 0 ? media[0].type : 'none',
+      media_count: media.length,
+      language
+    };
+    
+    // Get AI analysis in parallel with file processing
+    const [aiAnalysis, similarComplaints] = await Promise.all([
+      analyzeComplaintWithAI(complaintData),
+      findSimilarComplaints(complaintData)
+    ]);
+    
+    // Log AI analysis for debugging
+    console.log('AI Analysis:', JSON.stringify(aiAnalysis, null, 2));
+    
+    // If similar complaints found, consider this a potential duplicate
+    const isPotentialDuplicate = similarComplaints.length > 0 && 
+                               (aiAnalysis.is_duplicate || similarComplaints.length >= 2);
 
     // Enhanced location validation
     if (!description || !location) {
@@ -69,91 +192,169 @@ router.post('/', authenticateToken, requireRole(['citizen']), (req, res, next) =
     let duplicates = [];
 
     try {
-      // Get existing complaints for AI analysis
-      const existingComplaints = await Complaint.find({}, 'complaint_id description').lean();
+      // Prepare data for AI service
+      const aiRequestData = {
+        description,
+        category: category || 'other',
+        location: {
+          latitude: location.lat,
+          longitude: location.lng
+        },
+        media_count: mediaFiles ? mediaFiles.length : 0,
+        upvotes: 0 // New complaints start with 0 upvotes
+      };
       
-      // Call AI service for analysis
-      const aiResponse = await fetch('http://localhost:5001/analyze', {
+      console.log('Sending to AI service:', JSON.stringify(aiRequestData, null, 2));
+      
+      // Call AI service for danger score
+      const dangerScoreResponse = await fetch('http://localhost:8000/api/ai/danger-score', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          description,
-          existing_complaints: existingComplaints
-        })
+        body: JSON.stringify(aiRequestData)
       });
 
-      if (aiResponse.ok) {
-        aiAnalysis = await aiResponse.json();
-        finalCategory = aiAnalysis.category;
-        dangerScore = aiAnalysis.danger_score;
-        duplicates = aiAnalysis.duplicates;
+      if (dangerScoreResponse.ok) {
+        const dangerData = await dangerScoreResponse.json();
+        dangerScore = dangerData.score || 0;
+        finalCategory = dangerData.risk_level || category || 'other';
         
-        console.log(`AI Analysis for ${complaint_id}:`, {
-          category: finalCategory,
-          dangerScore,
-          duplicates: duplicates.length
+        console.log(`AI Danger Score for ${complaint_id}:`, {
+          score: dangerScore,
+          risk_level: finalCategory,
+          factors: dangerData.factors || []
         });
       }
     } catch (aiError) {
       console.warn('AI service unavailable, using fallback categorization:', aiError.message);
     }
 
-    // Create complaint in MongoDB
+    // Create new complaint with AI-enhanced data
     const complaint = new Complaint({
-      complaint_id,
+      _id: `COMP-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
       citizen_id,
-      description,
-      location,
-      media: mediaFiles,
-      status: 'unresolved',
-      upvotes: [],
-      refiles: [],
-      actions: [],
-      confirmations: [],
-      dangerScore
+      description: aiAnalysis.auto_description || description,
+      original_description: description, // Store original for reference
+      category,
+      location: {
+        type: 'Point',
+        coordinates: [location.lng, location.lat],
+        address: location.address,
+        geohash: '' // Will be set by pre-save hook
+      },
+      status: isPotentialDuplicate ? 'pending_review' : 'pending',
+      upvotes: 0,
+      media: media.map(file => ({
+        url: file.path,
+        type: file.type,
+        thumbnail: file.thumbnail,
+        size: file.size,
+        uploaded_at: new Date()
+      })),
+      ai_analysis: {
+        danger_score: aiAnalysis.danger_score || 0,
+        risk_level: aiAnalysis.risk_level || 'medium',
+        sentiment: aiAnalysis.sentiment || 'neutral',
+        is_duplicate: aiAnalysis.is_duplicate || false,
+        similar_complaints: similarComplaints.map(c => ({
+          id: c._id,
+          similarity: 0.8, // This would come from vector similarity in production
+          reason: 'Similar description and location'
+        })),
+        analyzed_at: new Date()
+      },
+      priority: calculatePriority(aiAnalysis.danger_score, aiAnalysis.risk_level),
+      actions: [{
+        action: isPotentialDuplicate ? 'created_as_duplicate' : 'created',
+        by: citizen_id,
+        at: new Date(),
+        comment: isPotentialDuplicate 
+          ? 'Complaint created (possible duplicate)' 
+          : 'Complaint created',
+        metadata: {
+          ai_generated: true,
+          risk_level: aiAnalysis.risk_level,
+          similar_complaints_count: similarComplaints.length
+        }
+      }]
     });
-
-    const savedComplaint = await complaint.save();
-
-    // Send push notification to staff about new complaint
-    try {
-      await notifyStaffNewComplaint(
-        savedComplaint.complaint_id,
-        description,
-        location?.address || 'Unknown location'
-      );
-    } catch (error) {
-      console.error('Failed to send staff notification:', error);
+    
+    // If similar complaints found, link them
+    if (similarComplaints.length > 0) {
+      complaint.related_complaints = similarComplaints.map(c => ({
+        complaint_id: c._id,
+        relation_type: 'similar',
+        confidence: 0.8, // Would come from vector similarity
+        created_at: new Date()
+      }));
     }
 
-    // Update citizen's complaints_filed array
     try {
-      await Citizen.findOneAndUpdate(
-        { citizen_id },
-        { 
-          $addToSet: { complaints_filed: complaint_id },
-          $setOnInsert: { 
-            citizen_id,
-            name: `User ${citizen_id}`, // Default name
-            email: `${citizen_id}@temp.com`, // Temporary email
-            verified: false
-          }
-        },
-        { upsert: true, new: true }
-      );
-    } catch (citizenError) {
-      console.warn('Could not update citizen record:', citizenError.message);
+      await complaint.save();
+      console.log('Complaint saved successfully:', complaint.complaint_id);
+
+      // Notify staff about new complaint
+      try {
+        await notifyStaffNewComplaint(complaint);
+        console.log('Staff notification sent for complaint:', complaint.complaint_id);
+      } catch (notifyError) {
+        console.error('Error sending staff notification:', notifyError);
+        // Continue even if notification fails
+      }
+
+      // Update citizen's complaints_filed array
+      try {
+        await Citizen.findOneAndUpdate(
+          { citizen_id },
+          { 
+            $addToSet: { complaints_filed: complaint_id },
+            $setOnInsert: { 
+              citizen_id,
+              name: `User ${citizen_id}`, // Default name
+              email: `${citizen_id}@temp.com`, // Temporary email
+              verified: false
+            }
+          },
+          { upsert: true, new: true }
+        );
+      } catch (citizenError) {
+        console.warn('Could not update citizen record:', citizenError.message);
+      }
+
+      // Send response with complaint ID
+      res.status(201).json({
+        success: true,
+        message: 'Complaint registered successfully',
+        complaint_id: complaint.complaint_id,
+        status: 'unresolved',
+        created_at: complaint.created_at,
+        category: finalCategory,
+        dangerScore,
+        duplicates: []
+      });
+    } catch (saveError) {
+      console.error('Error saving complaint to database:', saveError);
+      
+      // Log detailed error information
+      if (saveError.name === 'ValidationError') {
+        const validationErrors = [];
+        for (const field in saveError.errors) {
+          validationErrors.push({
+            field,
+            message: saveError.errors[field].message,
+            value: saveError.errors[field].value
+          });
+        }
+        console.error('Validation errors:', validationErrors);
+      }
+      
+      // Send detailed error response
+      res.status(500).json({
+        error: 'Failed to save complaint',
+        details: process.env.NODE_ENV === 'development' ? saveError.message : 'Internal server error',
+        ...(process.env.NODE_ENV === 'development' && { stack: saveError.stack })
+      });
     }
 
-    // Return response
-    res.status(201).json({
-      complaint_id,
-      status: 'unresolved',
-      created_at: savedComplaint.created_at,
-      category: finalCategory,
-      dangerScore,
-      duplicates: duplicates.length > 0 ? duplicates.slice(0, 3) : [] // Return top 3 duplicates
-    });
 
   } catch (error) {
     console.error('Error creating complaint:', error);

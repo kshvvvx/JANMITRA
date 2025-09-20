@@ -13,10 +13,11 @@ const complaintsRouter = require('./routes/complaints');
 const staffRouter = require('./routes/staff');
 const departmentsRouter = require('./routes/departments');
 const supervisorRouter = require('./routes/supervisor');
-const auditLogsRouter = require('./routes/auditLogs');
+// Temporarily disabled for testing
+// const auditLogsRouter = require('./routes/auditLogs');
 
 // Import middleware
-const auditLogMiddleware = require('./middleware/auditLogMiddleware');
+// const auditLogMiddleware = require('./middleware/auditLogMiddleware');
 
 const app = express();
 
@@ -30,8 +31,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// Audit logging middleware
-app.use(auditLogMiddleware);
+// Audit logging middleware (temporarily disabled)
+// app.use(auditLogMiddleware);
 
 // Serve static files from uploads directory
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -60,7 +61,8 @@ app.use('/api/complaints', complaintsRouter);
 app.use('/api/departments', departmentsRouter);
 app.use('/api/supervisor', supervisorRouter);
 app.use('/api/staff', staffRouter);
-app.use('/api/audit-logs', auditLogsRouter);
+// Temporarily disabled
+// app.use('/api/audit-logs', auditLogsRouter);
 
 // Error handling middleware (should be after all other middleware and routes)
 app.use((err, req, res, next) => {

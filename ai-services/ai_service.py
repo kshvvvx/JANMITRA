@@ -1,11 +1,27 @@
 import os
 import openai
 import numpy as np
-from typing import Dict, List, Tuple, Optional
-from pydantic import BaseModel
-from fastapi import FastAPI, HTTPException
+from typing import Dict, List, Tuple, Optional, Any
+from pydantic import BaseModel, Field, validator, HttpUrl
+from fastapi import FastAPI, HTTPException, Request, Depends, status, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
 import logging
+import time
+from functools import lru_cache, wraps
+from datetime import datetime, timedelta
+import json
+import hashlib
+import redis
+from ratelimit import limits, sleep_and_retry
+from tenacity import retry, stop_after_attempt, wait_exponential
+import sentry_sdk
+from prometheus_fastapi_instrumentator import Instrumentator
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import MongoClient, ASCENDING, DESCENDING
+import uuid
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -27,62 +43,228 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load environment variables
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    logger.warning("OPENAI_API_KEY not found in environment variables")
+# Load environment variables with validation
+class Settings(BaseModel):
+    OPENAI_API_KEY: str = Field(..., env='OPENAI_API_KEY')
+    REDIS_URL: str = Field('redis://localhost:6379/0', env='REDIS_URL')
+    RATE_LIMIT: int = Field(60, env='RATE_LIMIT')  # requests per minute
+    CACHE_TTL: int = Field(3600, env='CACHE_TTL')  # 1 hour cache
+    ENVIRONMENT: str = Field('development', env='ENVIRONMENT')
+    SENTRY_DSN: Optional[str] = Field(None, env='SENTRY_DSN')
+    
+    class Config:
+        env_file = '.env'
+        env_file_encoding = 'utf-8'
 
-# Initialize OpenAI client
-openai.api_key = OPENAI_API_KEY
+# Initialize settings
+settings = Settings()
+
+# Initialize MongoDB client
+mongo_client = None
+if settings.ENVIRONMENT != 'test':
+    try:
+        mongo_client = AsyncIOMotorClient(os.getenv("MONGODB_URI", "mongodb://localhost:27017"))
+        db = mongo_client.get_database("ai_service")
+        logger.info("Connected to MongoDB")
+    except Exception as e:
+        logger.error(f"Failed to connect to MongoDB: {e}")
+        if settings.ENVIRONMENT == 'production':
+            raise
+
+# Initialize Sentry for error tracking
+if settings.SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=settings.SENTRY_DSN,
+        environment=settings.ENVIRONMENT,
+        traces_sample_rate=1.0,
+        profiles_sample_rate=1.0,
+    )
+
+# Initialize Redis for caching
+redis_client = None
+try:
+    redis_client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+    redis_client.ping()
+except Exception as e:
+    logger.warning(f"Redis connection failed: {e}. Using in-memory cache.")
+    redis_client = None
+
+# Cache decorator with Redis fallback
+def cache_response(ttl: int = 3600):
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            if not redis_client:
+                return await func(*args, **kwargs)
+                
+            # Create a cache key from function name and arguments
+            cache_key = f"ai_cache:{func.__name__}:{hashlib.md5(str(args[1:]).encode()).hexdigest()}"
+            
+            # Try to get cached result
+            cached_result = redis_client.get(cache_key)
+            if cached_result:
+                logger.debug(f"Cache hit for {cache_key}")
+                return json.loads(cached_result)
+                
+            # Call the function and cache the result
+            result = await func(*args, **kwargs)
+            if result is not None:
+                redis_client.setex(cache_key, ttl, json.dumps(jsonable_encoder(result)))
+            return result
+            
+        return wrapper
+    return decorator
+
+# Rate limiting decorator
+RATE_LIMIT = settings.RATE_LIMIT
+ONE_MINUTE = 60
+
+@sleep_and_retry
+@limits(calls=RATE_LIMIT, period=ONE_MINUTE)
+def check_rate_limit():
+    """Raises an exception if the rate limit is exceeded"""
+    return True
+
+# Initialize OpenAI client with retry mechanism
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=10),
+    reraise=True
+)
+async def get_openai_client():
+    if not settings.OPENAI_API_KEY:
+        raise ValueError("OPENAI_API_KEY is not configured")
+    
+    try:
+        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        # Test the connection
+        client.models.list()
+        logger.info("Successfully connected to OpenAI API")
+        return client
+    except Exception as e:
+        logger.error(f"Failed to initialize OpenAI client: {e}")
+        raise
+
+# Initialize on startup
+@app.on_event("startup")
+async def startup_event():
+    try:
+        app.state.openai_client = await get_openai_client()
+        # Initialize metrics
+        Instrumentator().instrument(app).expose(app)
+    except Exception as e:
+        logger.error(f"Startup error: {e}")
+        if settings.ENVIRONMENT != 'development':
+            raise
 
 # Models
+class LocationData(BaseModel):
+    """Location data model with validation."""
+    lat: float = Field(..., ge=-90, le=90, description="Latitude between -90 and 90")
+    lng: float = Field(..., ge=-180, le=180, description="Longitude between -180 and 180")
+    address: Optional[str] = None
+    accuracy: Optional[float] = Field(None, ge=0, description="Accuracy in meters")
+    
+    @validator('lat', 'lng')
+    def validate_coordinates(cls, v, field):
+        if field.name == 'lat' and not -90 <= v <= 90:
+            raise ValueError('Latitude must be between -90 and 90')
+        if field.name == 'lng' and not -180 <= v <= 180:
+            raise ValueError('Longitude must be between -180 and 180')
+        return v
+
 class ComplaintData(BaseModel):
-    description: str
-    category: str
-    location: Dict[str, float]  # {latitude, longitude}
-    media_type: Optional[str] = None  # 'image' or 'video' or None
-    user_history: Optional[Dict] = None  # User's complaint history
-    additional_context: Optional[Dict] = None
+    """Enhanced complaint data structure with validation."""
+    description: str = Field(..., min_length=10, max_length=5000)
+    category: str = Field(..., min_length=2, max_length=100)
+    location: LocationData
+    media_type: Optional[str] = Field(
+        None, 
+        regex='^(image|video|audio|document|none)$',
+        description="Type of media attached to the complaint"
+    )
+    media_count: int = Field(0, ge=0, le=10, description="Number of media files (0-10)")
+    upvotes: int = Field(0, ge=0, description="Number of upvotes")
+    user_history: Optional[Dict[str, Any]] = Field(
+        None,
+        description="User's previous complaint history"
+    )
+    additional_context: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Additional context or metadata"
+    )
+    language: str = Field("en", min_length=2, max_length=2, description="ISO 639-1 language code")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "description": "There's a large pothole causing traffic issues",
+                "category": "Roads",
+                "location": {
+                    "lat": 12.9716,
+                    "lng": 77.5946,
+                    "address": "MG Road, Bangalore"
+                },
+                "media_type": "image",
+                "media_count": 1,
+                "language": "en"
+            }
+        }
 
 class DangerScoreResponse(BaseModel):
-    score: float  # 0-100
+    """Response model for danger score calculation."""
+    score: float  # 0-10 scale for compatibility with backend
     risk_level: str  # 'low', 'medium', 'high', 'critical'
-    factors: List[str]  # List of factors contributing to the score
-    confidence: float  # 0-1
+    factors: List[str] = []  # List of factors contributing to the score
+    confidence: float = 0.8  # Confidence score (0-1)
 
 class AutoDescriptionResponse(BaseModel):
+    """Response model for auto-generated descriptions."""
     description: str
     keywords: List[str]
-    confidence: float  # 0-1
+    confidence: float
+
+class FeedbackRequest(BaseModel):
+    """Model for user feedback on AI analysis."""
+    complaint_id: str
+    feedback_type: str  # 'positive', 'negative', 'correction'
+    message: Optional[str] = None
+    corrections: Optional[Dict[str, Any]] = None
+    user_id: Optional[str] = None
+    session_id: Optional[str] = None  # 0-1
 
 # Constants
 RISK_LEVELS = {
-    'low': (0, 30),
-    'medium': (31, 70),
-    'high': (71, 90),
-    'critical': (91, 100)
+    'low': (0, 3.3),
+    'medium': (3.4, 6.6),
+    'high': (6.7, 8.3),
+    'critical': (8.4, 10.0)
 }
 
-# Predefined categories with base risk scores
-CATEGORY_RISK_SCORES = {
-    'medical_emergency': 95,
-    'fire': 90,
-    'violence': 85,
-    'accident': 80,
-    'electrical_hazard': 75,
-    'water_leakage': 60,
-    'road_damage': 55,
-    'garbage': 40,
-    'street_light': 35,
-    'other': 30
-}
-
-# Keywords that indicate higher risk
+# High-risk keywords that would increase danger score
 HIGH_RISK_KEYWORDS = [
     'fire', 'emergency', 'accident', 'injury', 'blood', 'violence',
     'attack', 'fight', 'explosion', 'leak', 'gas', 'chemical', 'collapse',
-    'flood', 'electrocution', 'hazard', 'danger', 'urgent', 'help'
+    'flood', 'electrocution', 'hazard', 'danger', 'urgent', 'help',
+    'blocked', 'obstruction', 'sinkhole', 'damage', 'broken', 'outage',
+    'exposed', 'unsafe', 'threat', 'crack', 'leaking'
 ]
+
+# Risk scores for different categories (0-10 scale)
+CATEGORY_RISK_SCORES = {
+    'accident': 8.0,
+    'fire': 9.5,
+    'flood': 8.5,
+    'violence': 9.0,
+    'medical': 8.0,
+    'electrical': 7.5,
+    'water': 6.0,
+    'road': 5.5,
+    'sanitation': 4.5,
+    'garbage': 4.0,
+    'street_light': 3.5,
+    'other': 3.0
+}
 
 # Utility functions
 def get_risk_level(score: float) -> str:
@@ -159,19 +341,18 @@ async def generate_danger_score(complaint: ComplaintData) -> DangerScoreResponse
                 factors.append(f"AI analysis: {ai_analysis}")
             except Exception as e:
                 logger.error(f"Error calling OpenAI: {str(e)}")
-                factors.append("AI analysis unavailable")
         
         return DangerScoreResponse(
-            score=round(final_score, 1),
+            score=final_score,
             risk_level=get_risk_level(final_score),
             factors=factors,
-            confidence=0.85  # Confidence in the score
+            confidence=0.8
         )
     except Exception as e:
         logger.error(f"Error in generate_danger_score: {str(e)}")
         # Return a default medium risk score in case of errors
         return DangerScoreResponse(
-            score=50.0,
+            score=5.0,
             risk_level='medium',
             factors=[f"Error in analysis: {str(e)}"],
             confidence=0.0
@@ -263,15 +444,56 @@ async def generate_auto_description(complaint: ComplaintData) -> AutoDescription
 
 # API Endpoints
 @app.post("/api/ai/danger-score", response_model=DangerScoreResponse)
-async def get_danger_score(complaint: ComplaintData):
+@cache_response(ttl=3600)  # Cache for 1 hour
+async def get_danger_score(
+    request: Request,
+    complaint: ComplaintData,
+    background_tasks: BackgroundTasks
+) -> DangerScoreResponse:
     """
-    Calculate a danger score for a complaint.
+    Calculate a danger score for a complaint with rate limiting and caching.
     """
     try:
-        return await generate_danger_score(complaint)
+        # Check rate limit
+        check_rate_limit()
+        
+        # Generate a cache key
+        cache_key = f"danger_score:{hashlib.md5(json.dumps(complaint.dict()).encode()).hexdigest()}"
+        
+        # Log the request for monitoring
+        logger.info(f"Danger score request: {complaint.category} in {complaint.location}")
+        
+        # Process in background if it's a heavy operation
+        if len(complaint.description) > 1000:  # Large text processing
+            background_tasks.add_task(
+                log_ai_usage,
+                feature="danger_score",
+                input_data=complaint.dict(),
+                user_agent=request.headers.get('user-agent')
+            )
+        
+        # Generate the score
+        result = await generate_danger_score(complaint)
+        
+        # Update cache asynchronously
+        if redis_client:
+            background_tasks.add_task(
+                redis_client.setex,
+                cache_key,
+                settings.CACHE_TTL,
+                json.dumps(jsonable_encoder(result))
+            )
+            
+        return result
+        
     except Exception as e:
-        logger.error(f"Error in /api/ai/danger-score: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error in get_danger_score: {e}", exc_info=True)
+        if settings.SENTRY_DSN:
+            sentry_sdk.capture_exception(e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate danger score: {str(e)}"
+        )
 
 @app.post("/api/ai/auto-description", response_model=AutoDescriptionResponse)
 async def get_auto_description(complaint: ComplaintData):
@@ -289,7 +511,100 @@ async def health_check():
     """Health check endpoint."""
     return {"status": "ok", "service": "janmitra-ai"}
 
+# Background task for logging
+async def log_ai_usage(
+    feature: str,
+    input_data: Dict[str, Any],
+    user_agent: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None
+):
+    """Log AI feature usage asynchronously."""
+    try:
+        log_entry = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "feature": feature,
+            "input_hash": hashlib.md5(json.dumps(input_data).encode()).hexdigest(),
+            "user_agent": user_agent,
+            "metadata": metadata or {}
+        }
+        
+        if redis_client:
+            # Store in Redis with 30-day expiry
+            log_key = f"ai_usage:{feature}:{log_entry['timestamp']}"
+            redis_client.setex(log_key, 60*60*24*30, json.dumps(log_entry))
+            
+    except Exception as e:
+        logger.error(f"Error logging AI usage: {e}")
+        if settings.SENTRY_DSN:
+            sentry_sdk.capture_exception(e)
+
+# Health check endpoint with dependency injection
+@app.get("/health")
+async def health_check():
+    """Health check endpoint with dependency verification."""
+    checks = {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "services": {
+            "openai": "ok" if hasattr(app.state, 'openai_client') and app.state.openai_client else "unavailable",
+            "redis": "ok" if redis_client and redis_client.ping() else "unavailable",
+            "sentry": "enabled" if settings.SENTRY_DSN else "disabled"
+        },
+        "version": "1.0.0",
+        "environment": settings.ENVIRONMENT
+    }
+    
+    return checks
+
+# Initialize Prometheus metrics
+REQUESTS = Counter('ai_requests_total', 'Total AI API requests', ['endpoint', 'status'])
+REQUEST_TIME = Histogram('ai_request_duration_seconds', 'Time spent processing requests', ['endpoint'])
+ERRORS = Counter('ai_errors_total', 'Total errors', ['error_type'])
+
+# Add metrics endpoint
+@app.get("/metrics")
+async def metrics():
+    return Response(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST
+    )
+
+# Add request monitoring middleware
+@app.middleware("http")
+async def monitor_requests(request: Request, call_next):
+    start_time = time.time()
+    endpoint = request.url.path
+    
+    try:
+        response = await call_next(request)
+        process_time = time.time() - start_time
+        
+        # Record metrics
+        REQUESTS.labels(endpoint=endpoint, status=response.status_code).inc()
+        REQUEST_TIME.labels(endpoint=endpoint).observe(process_time)
+        
+        return response
+        
+    except HTTPException as e:
+        ERRORS.labels(error_type=f"http_{e.status_code}").inc()
+        raise
+    except Exception as e:
+        ERRORS.labels(error_type=type(e).__name__).inc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+# Initialize Prometheus instrumentation
+Instrumentator().instrument(app).expose(app)
+
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(
+        "ai_service:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=settings.ENVIRONMENT == "development",
+        workers=4 if settings.ENVIRONMENT == "production" else 1,
+        log_level="info"
+    )
