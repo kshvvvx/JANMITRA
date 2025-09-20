@@ -90,7 +90,18 @@ const supervisorRoutes = require('./routes/supervisor');
 const auditLogRoutes = require('./routes/auditLogs');
 const { startComplaintAutoResolutionJob } = require('./utils/cronJobs');
 
-// Initialize express app
+// Import routes
+const authRouter = require('./routes/auth');
+const complaintsRouter = require('./routes/complaints');
+const staffRouter = require('./routes/staff');
+const departmentsRouter = require('./routes/departments');
+const supervisorRouter = require('./routes/supervisor');
+// Temporarily disabled for testing
+// const auditLogsRouter = require('./routes/auditLogs');
+
+// Import middleware
+// const auditLogMiddleware = require('./middleware/auditLogMiddleware');
+
 const app = express();
 
 // ======================
@@ -149,8 +160,8 @@ mongoose.connect(MONGODB_URI, {
 // Routes
 // ======================
 
-// Apply auth rate limiting to auth routes
-app.use('/api/auth', authLimiter);
+// Audit logging middleware (temporarily disabled)
+// app.use(auditLogMiddleware);
 
 // Apply complaint rate limiting to complaint submission routes
 app.post('/api/complaints', complaintLimiter);
@@ -188,13 +199,14 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// API Routes
-app.use('/api/v1/auth', authRoutes);
-app.use('/api/v1/complaints', complaintRoutes);
-app.use('/api/v1/users', userRoutes);
-app.use('/api/v1/departments', departmentRoutes);
-app.use('/api/v1/supervisor', supervisorRoutes);
-app.use('/api/v1/audit-logs', auditLogRoutes);
+// Mount routes
+app.use('/api/auth', authRouter);
+app.use('/api/complaints', complaintsRouter);
+app.use('/api/departments', departmentsRouter);
+app.use('/api/supervisor', supervisorRouter);
+app.use('/api/staff', staffRouter);
+// Temporarily disabled
+// app.use('/api/audit-logs', auditLogsRouter);
 
 // 404 Handler
 app.all('*', (req, res) => {

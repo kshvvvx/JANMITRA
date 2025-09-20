@@ -3,173 +3,358 @@
 
 const express = require('express');
 const router = express.Router();
-const { Complaint } = require('../models');
-const { authenticateToken } = require('../middleware/auth');
-const { 
-  checkDepartmentAccess, 
-  checkDuplicateComplaint,
-  validateMedia,
-  validateStatusUpdate,
-  validateRefile,
-  createComplaintValidation,
-  updateStatusValidation,
-  refileValidation
-} = require('../middleware/complaintValidation');
-const { 
-  cacheMiddleware, 
-  invalidateCache, 
-  keyBuilders, 
-  invalidationPatterns 
-} = require('../middleware/cacheMiddleware');
-const { validationResult } = require('express-validator');
-const logger = require('../config/logger');
+const axios = require('axios');
+const { Complaint, Citizen } = require('../models');
+const { calculateDistance } = require('../utils/geo');
+const { authenticateToken, requireRole, requireCitizen, requireStaff, requireSupervisor, requireStaffOrSupervisor } = require('../middleware/auth');
+const { notifyComplaintStatusChange, notifyComplaintUpvoted, notifyStaffNewComplaint } = require('../utils/notifications');
+const { uploadMultiple, handleUploadError, processUploadedFiles } = require('../middleware/upload');
+const { v4: uuidv4 } = require('uuid');
+
+// AI Service Configuration
+const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
+const AI_REQUEST_TIMEOUT = 5000; // 5 seconds
 
 /**
- * Role-based access control middleware
- * @param {string|string[]} allowedRoles - Role or array of roles that are allowed to access the route
- * @returns {Function} Express middleware function
+ * Call AI service to analyze complaint
+ * @param {Object} complaintData - Complaint data to analyze
+ * @returns {Promise<Object>} AI analysis results
  */
-const requireRole = (allowedRoles) => {
-  return (req, res, next) => {
-    // Convert single role to array for uniform handling
-    const roles = Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles];
-    
-    // Check if user is authenticated and has a role
-    if (!req.user || !req.user.role) {
-      return res.status(401).json({ 
-        success: false, 
-        error: 'Authentication required',
-        details: 'User role not found in request'
-      });
-    }
-    
-    // Check if user's role is in the allowed roles
-    if (!roles.includes(req.user.role)) {
-      return res.status(403).json({ 
-        success: false, 
-        error: 'Access denied',
-        details: `This endpoint requires one of these roles: ${roles.join(', ')}`
-      });
-    }
-    
-    // User has required role, proceed to the next middleware
-    next();
-  };
-};
-
-// Health check endpoint
-router.get('/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'ok', 
-    service: 'complaints',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development',
-    version: '1.0.0'
-  });
-});
-
-// Create a new complaint (citizens only)
-// Create a new complaint
-router.post('/', 
-  authenticateToken, 
-  requireRole('citizen'),
-  validateMedia,
-  checkDuplicateComplaint,
-  createComplaintValidation,
-  invalidateCache(invalidationPatterns.allComplaints),
-  invalidateCache((req) => invalidationPatterns.userComplaints(req)),
-  async (req, res) => {
-    // Handle validation errors
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ 
-        success: false,
-        errors: errors.array() 
-      });
-    }
+async function analyzeComplaintWithAI(complaintData) {
   try {
-    const { description, descriptionAudioUrl, media = [], location } = req.body;
+    const response = await axios.post(
+      `${AI_SERVICE_URL}/api/ai/analyze`,
+      {
+        description: complaintData.description,
+        category: complaintData.category,
+        location: complaintData.location,
+        media_type: complaintData.media_type,
+        media_count: complaintData.media?.length || 0,
+        language: complaintData.language || 'en'
+      },
+      { 
+        timeout: AI_REQUEST_TIMEOUT,
+        headers: { 'Content-Type': 'application/json' }
+      }
+    );
+    return response.data;
+  } catch (error) {
+    console.error('AI Service Error:', error.message);
+    // Return default values if AI service is unavailable
+    return {
+      danger_score: 5.0,
+      risk_level: 'medium',
+      auto_description: complaintData.description.substring(0, 150) + '...',
+      sentiment: 'neutral',
+      is_duplicate: false,
+      similar_complaints: []
+    };
+  }
+}
 
-    // Validate required fields
-    if (!description) {
-      return res.status(400).json({
-        success: false,
-        error: 'Description is required',
-        field: 'description'
-      });
+/**
+ * Find similar existing complaints
+ * @param {Object} complaintData - New complaint data
+ * @returns {Promise<Array>} List of similar complaints
+ */
+async function findSimilarComplaints(complaintData) {
+  try {
+    // Search for similar complaints in the last 30 days
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    
+    // Basic text similarity search (can be enhanced with vector search)
+    const keywords = complaintData.description
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(word => word.length > 3);
+    
+    const query = {
+      $or: [
+        { description: { $regex: keywords.join('|'), $options: 'i' } },
+        { category: complaintData.category }
+      ],
+      status: { $ne: 'resolved' },
+      createdAt: { $gte: thirtyDaysAgo }
+    };
+
+    if (complaintData.location) {
+      // Add location-based filtering (within 1km radius)
+      const { lat, lng } = complaintData.location;
+      if (lat && lng) {
+        query['location.coordinates'] = {
+          $near: {
+            $geometry: {
+              type: 'Point',
+              coordinates: [lng, lat] // MongoDB uses [longitude, latitude] order
+            },
+            $maxDistance: 1000, // 1km radius
+            $minDistance: 0
+          }
+        };
+      }
     }
 
-    if (!location || !location.coordinates || !Array.isArray(location.coordinates) || location.coordinates.length !== 2) {
-      return res.status(400).json({
-        success: false,
-        error: 'Valid location with coordinates [lng, lat] is required',
-        field: 'location'
-      });
-    }
+    return await Complaint.find(query)
+      .sort({ upvotes: -1, createdAt: -1 })
+      .limit(5)
+      .lean();
+  } catch (error) {
+    console.error('Error finding similar complaints:', error);
+    return [];
+  }
+}
 
-    // Prepare complaint data
+// Create a new complaint with AI integration (citizens only)
+router.post('/', authenticateToken, requireRole(['citizen']), (req, res, next) => {
+  // Skip multer for JSON requests
+  if (req.headers['content-type'] === 'application/json') {
+    return next();
+  }
+  uploadMultiple(req, res, next);
+}, handleUploadError, async (req, res) => {
+  try {
+    // Handle both JSON and multipart form data
+    const description = req.body.description;
+    const category = req.body.category;
+    const location = typeof req.body.location === 'string' ? JSON.parse(req.body.location) : req.body.location;
+    const language = req.body.language || 'en';
+    
+    // Use authenticated citizen's ID
+    const citizen_id = req.user.userId;
+    
+    // Process media files if any
+    const media = req.files ? await processUploadedFiles(req.files) : [];
+    
+    // Prepare complaint data for AI analysis
     const complaintData = {
       description,
-      descriptionAudioUrl: descriptionAudioUrl || undefined,
-      media: media.map(m => ({
-        url: m.url,
-        mimeType: m.mimeType || 'application/octet-stream',
-        uploadedBy: req.user._id,
-        uploadedByModel: 'Citizen'
-      })),
+      category,
+      location,
+      media_type: media.length > 0 ? media[0].type : 'none',
+      media_count: media.length,
+      language
+    };
+    
+    // Get AI analysis in parallel with file processing
+    const [aiAnalysis, similarComplaints] = await Promise.all([
+      analyzeComplaintWithAI(complaintData),
+      findSimilarComplaints(complaintData)
+    ]);
+    
+    // Log AI analysis for debugging
+    console.log('AI Analysis:', JSON.stringify(aiAnalysis, null, 2));
+    
+    // If similar complaints found, consider this a potential duplicate
+    const isPotentialDuplicate = similarComplaints.length > 0 && 
+                               (aiAnalysis.is_duplicate || similarComplaints.length >= 2);
+
+    // Enhanced location validation
+    if (!description || !location) {
+      return res.status(400).json({
+        error: 'Missing required fields: description and location are required'
+      });
+    }
+
+    // Validate location has required fields
+    if (!location.address) {
+      return res.status(400).json({
+        error: 'Location must include an address'
+      });
+    }
+
+    // For GPS locations, validate coordinates
+    if (location.lat !== null && location.lng !== null) {
+      if (typeof location.lat !== 'number' || typeof location.lng !== 'number') {
+        return res.status(400).json({
+          error: 'Invalid GPS coordinates: lat and lng must be numbers'
+        });
+      }
+      
+      // Validate coordinate ranges
+      if (location.lat < -90 || location.lat > 90 || location.lng < -180 || location.lng > 180) {
+        return res.status(400).json({
+          error: 'Invalid GPS coordinates: lat must be between -90 and 90, lng must be between -180 and 180'
+        });
+      }
+    }
+
+    // Process uploaded media files
+    const mediaFiles = processUploadedFiles(req, req.files || []);
+
+    // Generate complaint ID
+    const complaint_id = Complaint.generateComplaintId();
+
+    // AI Analysis (if AI service is available)
+    let aiAnalysis = null;
+    let finalCategory = category || 'other';
+    let dangerScore = 0;
+    let duplicates = [];
+
+    try {
+      // Prepare data for AI service
+      const aiRequestData = {
+        description,
+        category: category || 'other',
+        location: {
+          latitude: location.lat,
+          longitude: location.lng
+        },
+        media_count: mediaFiles ? mediaFiles.length : 0,
+        upvotes: 0 // New complaints start with 0 upvotes
+      };
+      
+      console.log('Sending to AI service:', JSON.stringify(aiRequestData, null, 2));
+      
+      // Call AI service for danger score
+      const dangerScoreResponse = await fetch('http://localhost:8000/api/ai/danger-score', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(aiRequestData)
+      });
+
+      if (dangerScoreResponse.ok) {
+        const dangerData = await dangerScoreResponse.json();
+        dangerScore = dangerData.score || 0;
+        finalCategory = dangerData.risk_level || category || 'other';
+        
+        console.log(`AI Danger Score for ${complaint_id}:`, {
+          score: dangerScore,
+          risk_level: finalCategory,
+          factors: dangerData.factors || []
+        });
+      }
+    } catch (aiError) {
+      console.warn('AI service unavailable, using fallback categorization:', aiError.message);
+    }
+
+    // Create new complaint with AI-enhanced data
+    const complaint = new Complaint({
+      _id: `COMP-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
+      citizen_id,
+      description: aiAnalysis.auto_description || description,
+      original_description: description, // Store original for reference
+      category,
       location: {
         type: 'Point',
-        coordinates: [
-          parseFloat(location.coordinates[0]), // lng
-          parseFloat(location.coordinates[1])  // lat
-        ]
+        coordinates: [location.lng, location.lat],
+        address: location.address,
+        geohash: '' // Will be set by pre-save hook
       },
-      address: {
-        state: location.state || '',
-        city: location.city || '',
-        area: location.area || '',
-        preciseLocation: location.preciseLocation || ''
+      status: isPotentialDuplicate ? 'pending_review' : 'pending',
+      upvotes: 0,
+      media: media.map(file => ({
+        url: file.path,
+        type: file.type,
+        thumbnail: file.thumbnail,
+        size: file.size,
+        uploaded_at: new Date()
+      })),
+      ai_analysis: {
+        danger_score: aiAnalysis.danger_score || 0,
+        risk_level: aiAnalysis.risk_level || 'medium',
+        sentiment: aiAnalysis.sentiment || 'neutral',
+        is_duplicate: aiAnalysis.is_duplicate || false,
+        similar_complaints: similarComplaints.map(c => ({
+          id: c._id,
+          similarity: 0.8, // This would come from vector similarity in production
+          reason: 'Similar description and location'
+        })),
+        analyzed_at: new Date()
       },
-      brief: 'Complaint registered', // Default brief as per requirements
-      createdBy: req.user._id,
-      auditLogs: [{
-        action: 'create',
-        by: req.user._id,
-        byModel: 'Citizen',
+      priority: calculatePriority(aiAnalysis.danger_score, aiAnalysis.risk_level),
+      actions: [{
+        action: isPotentialDuplicate ? 'created_as_duplicate' : 'created',
+        by: citizen_id,
         at: new Date(),
-        meta: {
-          descriptionLength: description.length,
-          hasAudio: !!descriptionAudioUrl,
-          mediaCount: media.length
+        comment: isPotentialDuplicate 
+          ? 'Complaint created (possible duplicate)' 
+          : 'Complaint created',
+        metadata: {
+          ai_generated: true,
+          risk_level: aiAnalysis.risk_level,
+          similar_complaints_count: similarComplaints.length
         }
       }]
-    };
+    });
+    
+    // If similar complaints found, link them
+    if (similarComplaints.length > 0) {
+      complaint.related_complaints = similarComplaints.map(c => ({
+        complaint_id: c._id,
+        relation_type: 'similar',
+        confidence: 0.8, // Would come from vector similarity
+        created_at: new Date()
+      }));
+    }
 
-    // Save to database
-    const complaint = new Complaint(complaintData);
-    await complaint.save();
+    try {
+      await complaint.save();
+      console.log('Complaint saved successfully:', complaint.complaint_id);
 
-    // Prepare response
-    const response = {
-      success: true,
-      message: 'Complaint created successfully',
-      data: {
-        id: complaint._id,
-        complaintNumber: complaint.complaintNumber,
-        status: complaint.status,
-        description: complaint.description,
-        brief: complaint.brief,
-        location: complaint.location,
-        address: complaint.address,
-        createdAt: complaint.createdAt,
-        media: complaint.media.map(m => ({
-          url: m.url,
-          mimeType: m.mimeType
-        }))
+      // Notify staff about new complaint
+      try {
+        await notifyStaffNewComplaint(complaint);
+        console.log('Staff notification sent for complaint:', complaint.complaint_id);
+      } catch (notifyError) {
+        console.error('Error sending staff notification:', notifyError);
+        // Continue even if notification fails
       }
-    };
 
-    res.status(201).json(response);
+      // Update citizen's complaints_filed array
+      try {
+        await Citizen.findOneAndUpdate(
+          { citizen_id },
+          { 
+            $addToSet: { complaints_filed: complaint_id },
+            $setOnInsert: { 
+              citizen_id,
+              name: `User ${citizen_id}`, // Default name
+              email: `${citizen_id}@temp.com`, // Temporary email
+              verified: false
+            }
+          },
+          { upsert: true, new: true }
+        );
+      } catch (citizenError) {
+        console.warn('Could not update citizen record:', citizenError.message);
+      }
+
+      // Send response with complaint ID
+      res.status(201).json({
+        success: true,
+        message: 'Complaint registered successfully',
+        complaint_id: complaint.complaint_id,
+        status: 'unresolved',
+        created_at: complaint.created_at,
+        category: finalCategory,
+        dangerScore,
+        duplicates: []
+      });
+    } catch (saveError) {
+      console.error('Error saving complaint to database:', saveError);
+      
+      // Log detailed error information
+      if (saveError.name === 'ValidationError') {
+        const validationErrors = [];
+        for (const field in saveError.errors) {
+          validationErrors.push({
+            field,
+            message: saveError.errors[field].message,
+            value: saveError.errors[field].value
+          });
+        }
+        console.error('Validation errors:', validationErrors);
+      }
+      
+      // Send detailed error response
+      res.status(500).json({
+        error: 'Failed to save complaint',
+        details: process.env.NODE_ENV === 'development' ? saveError.message : 'Internal server error',
+        ...(process.env.NODE_ENV === 'development' && { stack: saveError.stack })
+      });
+    }
+
 
   } catch (error) {
     console.error('Error creating complaint:', error);
