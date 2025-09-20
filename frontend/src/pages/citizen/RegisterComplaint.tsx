@@ -6,13 +6,17 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { ArrowLeft, Camera, MapPin, Mic, MicOff, Upload, CheckCircle } from 'lucide-react';
+import { ArrowLeft, Camera, MapPin, Mic, MicOff, Upload, CheckCircle, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { useCreateComplaint, useAIAnalysis } from '@/hooks';
+import { useToast } from '@/hooks/use-toast';
 
 export const RegisterComplaint = () => {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [step, setStep] = useState(1);
   const [isRecording, setIsRecording] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [formData, setFormData] = useState({
     category: '',
     location: '',
@@ -21,6 +25,10 @@ export const RegisterComplaint = () => {
     media: [] as File[]
   });
   const [complaintNumber, setComplaintNumber] = useState('');
+  const [aiAnalysis, setAiAnalysis] = useState(null);
+
+  const createComplaintMutation = useCreateComplaint();
+  const aiAnalysisMutation = useAIAnalysis();
 
   const categories = [
     'Roads & Infrastructure',
@@ -41,11 +49,59 @@ export const RegisterComplaint = () => {
     if (step > 1) setStep(step - 1);
   };
 
-  const handleSubmit = () => {
-    // Generate mock complaint number
-    const number = 'JM' + Math.random().toString(36).substr(2, 6).toUpperCase();
-    setComplaintNumber(number);
-    setStep(5);
+  const handleAnalyzeWithAI = async () => {
+    if (!formData.description) {
+      toast({
+        title: 'Error',
+        description: 'Please enter a description first',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsAnalyzing(true);
+    try {
+      const result = await aiAnalysisMutation.mutateAsync(formData.description);
+      setAiAnalysis(result);
+      toast({
+        title: 'AI Analysis Complete',
+        description: 'Your complaint has been analyzed for priority and similar issues',
+      });
+    } catch (error) {
+      toast({
+        title: 'AI Analysis Failed',
+        description: 'Could not analyze the complaint. Continuing with manual submission.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handleSubmit = async () => {
+    try {
+      const complaintData = {
+        description: formData.description,
+        category: formData.category,
+        location: {
+          lat: formData.coordinates.lat,
+          lng: formData.coordinates.lng,
+          address: formData.location
+        },
+        media: [], // TODO: Handle file uploads
+        citizen_id: localStorage.getItem('userId') || 'guest-user'
+      };
+
+      const result = await createComplaintMutation.mutateAsync(complaintData);
+      setComplaintNumber(result.id);
+      setStep(5);
+    } catch (error) {
+      toast({
+        title: 'Submission Failed',
+        description: 'Could not submit complaint. Please try again.',
+        variant: 'destructive',
+      });
+    }
   };
 
   const toggleRecording = () => {

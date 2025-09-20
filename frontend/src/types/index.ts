@@ -3,26 +3,30 @@ export type Language = 'en' | 'hi';
 
 export interface Complaint {
   id: string;
-  complaintNumber: string;
-  title: string;
   description: string;
-  location: {
-    address: string;
-    coordinates: {
-      lat: number;
-      lng: number;
-    };
-  };
-  status: 'pending' | 'in-progress' | 'resolved';
   category: string;
-  dateSubmitted: string;
-  expectedResolution?: string;
+  location: {
+    lat: number;
+    lng: number;
+    address: string;
+  };
+  media: string[];
+  status: 'unresolved' | 'in-progress' | 'resolved' | 'awaiting_confirmation';
   upvotes: number;
-  refiles: number;
-  media?: string[];
-  citizenId: string;
-  assignedTo?: string;
-  comments?: ComplaintComment[];
+  created_at: string;
+  updated_at: string;
+  citizen_id: string;
+  actions: Array<{
+    type: string;
+    timestamp: string;
+    user_id: string;
+    comment?: string;
+  }>;
+  title?: string;
+  complaintNumber?: string;
+  dateSubmitted?: string;
+  refiles?: number;
+  citizenId?: string;
 }
 
 export interface ComplaintComment {
